@@ -1,0 +1,54 @@
+name: Update HREF Hodograph Map
+
+on:
+  schedule:
+    - cron: '20 3,15 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.ACTION_TOKEN }}
+        fetch-depth: 0  # <--- THIS IS THE FIX for the red "Failed" error
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libeccodes0
+        pip install xarray matplotlib cartopy metpy requests numpy cfgrib ecmwflibs
+
+    - name: Run Plotting Script
+      run: python plot_href_hodographs.py
+
+    - name: Commit and Push New Images
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Remove junk files
+        rm -f *.idx
+        
+        # Add the new images
+        git add images/*.png
+        
+        # Commit
+        git commit -m "Auto-update HREF plots for $(date -u)" || echo "No changes to commit"
+        
+        # Pull latest changes to resolve any conflicts
+        git pull --rebase
+        
+        # Push
+        git push
