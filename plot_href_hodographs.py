@@ -26,7 +26,7 @@ GRID_SPACING = 25
 BOX_SIZE = 100000
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
-# --- CAPE SETTINGS (Background) ---
+# --- CAPE COLORS (Background) ---
 CAPE_LEVELS = np.arange(0, 5001, 250)
 CAPE_COLORS = [
     '#ffffff', '#f5f5f5', '#b0b0b0', '#808080',
@@ -37,19 +37,20 @@ CAPE_COLORS = [
 ]
 CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
 
-# --- UH SETTINGS ---
+# --- MAX UH COLORS (Green Scale) ---
 UH_MAX_LEVELS = [25, 50, 75, 100, 150, 200, 250]
 uh_max_colors = [
-    (0.5, 1, 0.5, 0.5), (0.2, 0.8, 0.2, 0.6), (0, 0.6, 0, 0.7),
-    (0, 0.4, 0, 0.8), (0, 0.2, 0, 0.9), (0, 0, 0, 1.0)
+    (0.6, 1, 0.6, 0.4), (0.3, 0.9, 0.3, 0.6), (0, 0.7, 0, 0.7),
+    (0, 0.5, 0, 0.8), (0, 0.3, 0, 0.9), (0, 0, 0, 1.0)
 ]
 UH_MAX_CMAP = mcolors.ListedColormap(uh_max_colors)
 UH_MAX_NORM = mcolors.BoundaryNorm(UH_MAX_LEVELS, UH_MAX_CMAP.N)
 
+# --- MIN UH COLORS (Blue Scale) ---
 UH_MIN_LEVELS = [-250, -200, -150, -100, -75, -50, -25]
 uh_min_colors = [
-    (0, 0, 0, 1.0), (0, 0, 0.2, 0.9), (0, 0, 0.4, 0.8),
-    (0, 0, 0.6, 0.7), (0, 0.4, 1, 0.6), (0, 0.7, 1, 0.5)
+    (0, 0, 0, 1.0), (0, 0, 0.3, 0.9), (0, 0, 0.5, 0.8),
+    (0, 0, 0.7, 0.7), (0.2, 0.4, 1, 0.6), (0.5, 0.8, 1, 0.5)
 ]
 UH_MIN_CMAP = mcolors.ListedColormap(uh_min_colors)
 UH_MIN_NORM = mcolors.BoundaryNorm(UH_MIN_LEVELS, UH_MIN_CMAP.N)
@@ -68,7 +69,6 @@ def get_latest_run_time():
     return date.strftime('%Y%m%d'), run, date
 
 def download_file(date_str, run, fhr, prod_type):
-    """Downloads a specific HREF product type (mean or pmmn)."""
     base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{date_str}/ensprod"
     filename = f"href.t{run}z.conus.{prod_type}.f{fhr:02d}.grib2"
     url = f"{base_url}/{filename}"
@@ -77,7 +77,6 @@ def download_file(date_str, run, fhr, prod_type):
         print(f"\n[f{fhr:02d}] Downloading Mean & PMMN data...")
 
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-
     try:
         with requests.get(url, stream=True, timeout=60, headers=headers) as r:
             if r.status_code == 404:
@@ -106,16 +105,14 @@ def plot_colored_hodograph(ax, u, v, levels):
 
 def process_forecast_hour(date_obj, date_str, run, fhr):
     mean_file = download_file(date_str, run, fhr, 'mean')
+    pmmn_file = download_file(date_str, run, fhr, 'pmmn')
+
     if not mean_file:
         print(f"Skipping f{fhr:02d} (Mean file missing)")
         return
 
-    pmmn_file = download_file(date_str, run, fhr, 'pmmn')
-
     try:
         print(f" Loading Data...")
-
-        # --- LOAD MEAN DATA ---
         ds_u = xr.open_dataset(mean_file, engine='cfgrib',
                                backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'u'}})
         ds_v = xr.open_dataset(mean_file, engine='cfgrib',
@@ -129,28 +126,34 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         except: 
             pass
 
-        # --- LOAD PMMN DATA ---
+        # --- LOAD PMMN DATA (BRUTE FORCE SCAN) ---
         ds_uh_max = None
         ds_uh_min = None
 
         if pmmn_file:
             try:
-                datasets = cfgrib.open_datasets(pmmn_file,
-                                               backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
+                datasets = cfgrib.open_datasets(pmmn_file)
                 for ds in datasets:
-                    for var in ds.data_vars:
-                        data = ds[var]
-                        val_max = data.values.max()
-                        val_min = data.values.min()
+                    for var_name in ds.data_vars:
+                        da = ds[var_name]
+                        level_match = False
 
-                        if val_max > 20:
-                            ds_uh_max = data
-                            print(f" Found Max UH (Peak: {val_max:.1f})")
-                        if val_min < -20:
-                            ds_uh_min = data
-                            print(f" Found Min UH (Peak: {val_min:.1f})")
+                        if 'heightAboveGroundLayer' in da.coords:
+                            if da['heightAboveGroundLayer'].values == 5000:
+                                level_match = True
+
+                        if level_match:
+                            val_max = float(da.values.max())
+                            val_min = float(da.values.min())
+
+                            if val_max > 20:
+                                ds_uh_max = da
+                                print(f" >> Found Candidate MAX UH (Val: {val_max:.1f})")
+                            if val_min < -20:
+                                ds_uh_min = da
+                                print(f" >> Found Candidate MIN UH (Val: {val_min:.1f})")
             except Exception as e:
-                print(f" PMMN UH Load Failed: {e}")
+                print(f" PMMN Scan Error: {e}")
 
         # --- PLOTTING ---
         file_levels = ds_wind.isobaricInhPa.values
@@ -179,29 +182,29 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                                     levels=CAPE_LEVELS, cmap=CAPE_CMAP,
                                     extend='max', alpha=0.6, transform=ccrs.PlateCarree())
             ax.set_facecolor('white')
-            plt.colorbar(cape_plot, ax=ax, orientation='horizontal', pad=0.03,
+            plt.colorbar(cape_plot, ax=ax, orientation='horizontal', pad=0.06,
                          aspect=50, shrink=0.9, label='SBCAPE (J/kg)')
 
         # 2. Plot MAX UH
         if ds_uh_max is not None:
-            uh_vals = ds_uh_max.values
-            if np.nanmax(uh_vals) > 25:
-                print(" Plotting Max UH Swaths (Green)...")
-                max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_vals,
+            vals = ds_uh_max.values
+            if np.nanmax(vals) > 25:
+                print(" Plotting Max UH Swaths...")
+                max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, vals,
                                        levels=UH_MAX_LEVELS, cmap=UH_MAX_CMAP, norm=UH_MAX_NORM,
                                        extend='max', transform=ccrs.PlateCarree(), zorder=15)
-                ax_cbar_max = fig.add_axes([0.15, 0.04, 0.33, 0.015])
+                ax_cbar_max = fig.add_axes([0.15, 0.08, 0.33, 0.015])
                 plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='Max UH (>25)')
 
         # 3. Plot MIN UH
         if ds_uh_min is not None:
-            uh_min_vals = ds_uh_min.values
-            if np.nanmin(uh_min_vals) < -25:
-                print(" Plotting Min UH Swaths (Blue)...")
-                min_plot = ax.contourf(ds_uh_min.longitude, ds_uh_min.latitude, uh_min_vals,
+            vals = ds_uh_min.values
+            if np.nanmin(vals) < -25:
+                print(" Plotting Min UH Swaths...")
+                min_plot = ax.contourf(ds_uh_min.longitude, ds_uh_min.latitude, vals,
                                        levels=UH_MIN_LEVELS, cmap=UH_MIN_CMAP, norm=UH_MIN_NORM,
                                        extend='min', transform=ccrs.PlateCarree(), zorder=15)
-                ax_cbar_min = fig.add_axes([0.55, 0.04, 0.33, 0.015])
+                ax_cbar_min = fig.add_axes([0.55, 0.08, 0.33, 0.015])
                 plt.colorbar(min_plot, cax=ax_cbar_min, orientation='horizontal', label='Min UH (<-25)')
 
         # 4. Legend
@@ -262,6 +265,6 @@ if __name__ == "__main__":
     date_str, run, date_obj = get_latest_run_time()
     run_dt = datetime.datetime.strptime(f"{date_str} {run}", "%Y%m%d %H")
     print(f"Starting HREF (Mean CAPE + PMMN UH) generation for {date_str} {run}Z")
-    
+
     for fhr in range(1, 49):
         process_forecast_hour(run_dt, date_str, run, fhr)
