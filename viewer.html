@@ -17,21 +17,19 @@
         
         h2 { margin: 5px 0; color: #333; }
         
-        /* CONTROLS & INFO */
         .controls { 
             margin-bottom: 10px; 
             font-size: 14px; 
             color: #555; 
         }
 
-        /* TIMELINE (Moved to TOP) */
         .timeline-container {
             display: grid;
-            grid-template-columns: repeat(24, 1fr); /* 2 rows of 24 boxes */
+            grid-template-columns: repeat(24, 1fr);
             width: 100%;
             max-width: 1200px;
             gap: 2px;
-            margin-bottom: 15px; /* Space between time bar and map */
+            margin-bottom: 15px;
             background: #fff;
             padding: 5px;
             border-radius: 5px;
@@ -53,7 +51,7 @@
             background: #4dabf7;
             color: white;
             border-color: #339af0;
-            transform: translateY(-2px); /* Pop up slightly */
+            transform: translateY(-2px);
         }
 
         .time-box.active {
@@ -63,28 +61,28 @@
             border-color: #0056b3;
         }
 
-        /* MAP CONTAINER */
+        /* --- UPDATED MAP CONTAINER CSS --- */
         #map-container {
             width: 100%;
             max-width: 1200px;
-            aspect-ratio: 18/12; 
+            /* Removed aspect-ratio so it doesn't crop */
+            /* Removed overflow:hidden so nothing gets hidden */
             background: #fff;
             border: 1px solid #ccc;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             display: flex;
             align-items: center;
             justify-content: center;
-            overflow: hidden;
-            position: relative;
+            padding: 5px; /* Add a little padding inside the frame */
+            min-height: 400px; /* Prevents collapse while loading */
         }
         
         #forecast-img {
             width: 100%;
-            height: auto;
+            height: auto; /* Allow height to adjust automatically */
             display: block;
         }
 
-        /* Loading Spinner placeholder */
         .loading-text {
             position: absolute;
             color: #888;
@@ -114,17 +112,12 @@
     const totalHours = 48;
     const imageDir = "images/";
     
-    // Determine latest run based on current UTC time
     const now = new Date();
     const utcHour = now.getUTCHours();
     
     let runDate = now;
     let runHour = '00';
 
-    // Logic: 
-    // If > 15:00 UTC -> Show today's 12Z
-    // If > 03:00 UTC -> Show today's 00Z
-    // Else -> Show yesterday's 12Z
     if (utcHour >= 15) {
         runHour = '12';
     } else if (utcHour >= 3) {
@@ -134,7 +127,6 @@
         runDate.setUTCDate(runDate.getUTCDate() - 1);
     }
 
-    // Format YYYYMMDD
     const yyyy = runDate.getUTCFullYear();
     const mm = String(runDate.getUTCMonth() + 1).padStart(2, '0');
     const dd = String(runDate.getUTCDate()).padStart(2, '0');
@@ -146,7 +138,6 @@
     const imgElement = document.getElementById('forecast-img');
     let boxes = [];
 
-    // Function to set image
     function setImage(fhr) {
         const fhrStr = String(fhr).padStart(2, '0');
         const filename = `href_hodo_cape_${dateStr}_${runHour}z_f${fhrStr}.png`;
@@ -154,20 +145,17 @@
         imgElement.style.display = 'block';
         imgElement.src = imageDir + filename;
 
-        // Update active class styling
         boxes.forEach(b => b.classList.remove('active'));
         const activeBox = document.getElementById(`box-${fhr}`);
         if(activeBox) activeBox.classList.add('active');
     }
 
-    // Build the Timeline Grid
     for (let i = 1; i <= totalHours; i++) {
         let box = document.createElement('div');
         box.className = 'time-box';
         box.textContent = `f${i}`;
         box.id = `box-${i}`;
         
-        // INTERACTION: Hover = Preview, Click = set
         box.addEventListener('mouseenter', () => setImage(i));
         box.addEventListener('click', () => setImage(i));
 
@@ -175,10 +163,8 @@
         boxes.push(box);
     }
 
-    // Initialize with first image
     setImage(1);
 
-    // Keyboard Navigation (Left/Right Arrows)
     document.addEventListener('keydown', (e) => {
         let currentSrc = imgElement.src;
         let match = currentSrc.match(/_f(\d+)\.png/);
