@@ -36,11 +36,24 @@ CAPE_COLORS = [
 ]
 CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
 
-# --- UH SETTINGS (0-3 km Rotation) ---
-UH_MAX_LEVELS = [20, 40, 60, 80, 100] 
-UH_MAX_COLORS = ['gold', 'orange', 'orangered', 'red', 'darkred']
-UH_MIN_LEVELS = [-100, -80, -60, -40, -20]
-UH_MIN_COLORS = ['navy', 'mediumblue', 'blue', 'dodgerblue', 'cyan']
+# --- UH SETTINGS (Color Fill) ---
+# Lower thresholds for Ensemble Mean (Mean smearing effect)
+UH_LEVELS = [10, 20, 30, 40, 50, 60, 70, 80, 100]
+# Custom "Swath" Colormap (Transparent -> Yellow -> Orange -> Red -> Black)
+# We create a list of RGBA colors.
+uh_colors = [
+    (1, 1, 0, 0.4),   # 10-20: Yellow (Semi-transparent)
+    (1, 0.8, 0, 0.5), # 20-30: Gold
+    (1, 0.6, 0, 0.6), # 30-40: Orange
+    (1, 0.4, 0, 0.7), # 40-50: Dark Orange
+    (1, 0, 0, 0.7),   # 50-60: Red
+    (0.8, 0, 0, 0.8), # 60-70: Dark Red
+    (0.6, 0, 0, 0.9), # 70-80: Maroon
+    (0.4, 0, 0, 1.0), # 80-100: Very Dark Red
+    (0, 0, 0, 1.0)    # 100+: Black
+]
+UH_CMAP = mcolors.ListedColormap(uh_colors)
+UH_NORM = mcolors.BoundaryNorm(UH_LEVELS, UH_CMAP.N)
 
 def get_latest_run_time():
     now = datetime.datetime.utcnow()
@@ -114,30 +127,35 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         except:
             pass
 
-        # --- 3. ROBUST UH LOADING ---
-        ds_uh_max = None
-        ds_uh_min = None
-
-        # Attempt to open file specifically looking for 'mxuphl' keys
+        # --- 3. ROBUST UH LOADING (Brute Force) ---
+        ds_uh = None
+        
+        # Strategy 1: Look for 'mxuphl' (Max Updraft Helicity)
         try:
-            # We open without filter first to scan variables
             ds_uh_raw = xr.open_dataset(grib_file, engine='cfgrib', 
                                         backend_kwargs={'filter_by_keys': {'shortName': 'mxuphl'}})
-            
             if 'mxuphl' in ds_uh_raw:
-                ds_uh_max = ds_uh_raw['mxuphl']
-                print(f"       Found Max UH (mxuphl). Max val: {ds_uh_max.values.max()}")
+                ds_uh = ds_uh_raw['mxuphl']
+                print(f"       Found Max UH (mxuphl). Max val: {ds_uh.values.max():.2f}")
         except Exception:
             pass
-
-        try:
-            ds_uh_min_raw = xr.open_dataset(grib_file, engine='cfgrib', 
-                                            backend_kwargs={'filter_by_keys': {'shortName': 'mnuphl'}})
-            if 'mnuphl' in ds_uh_min_raw:
-                ds_uh_min = ds_uh_min_raw['mnuphl']
-                print("       Found Min UH (mnuphl).")
-        except Exception:
-            pass
+            
+        # Strategy 2: If finding by shortName failed, try finding by "unknown" param ID or stepType
+        # Sometimes 0-3km UH is labeled weirdly in GRIB tables
+        if ds_uh is None:
+            print("       'mxuphl' not found. Searching all variables...")
+            try:
+                # Open entire file without filter
+                full_ds = xr.open_dataset(grib_file, engine='cfgrib')
+                for var in full_ds.data_vars:
+                    attrs = full_ds[var].attrs
+                    name = attrs.get('long_name', '').lower()
+                    if 'helicity' in name and 'updraft' in name:
+                        print(f"       Found alternative UH variable: {var} ({attrs.get('long_name')})")
+                        ds_uh = full_ds[var]
+                        break
+            except Exception:
+                pass
 
         # --- 4. Level Filtering ---
         file_levels = ds_wind.isobaricInhPa.values
@@ -171,27 +189,25 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                                     extend='max', alpha=0.6, transform=ccrs.PlateCarree())
             
             ax.set_facecolor('white')
-            plt.colorbar(cape_plot, ax=ax, orientation='horizontal', pad=0.02, 
+            # CAPE COLORBAR (BOTTOM)
+            cbar_cape = plt.colorbar(cape_plot, ax=ax, orientation='horizontal', pad=0.02, 
                          aspect=50, shrink=0.8, label='SBCAPE (J/kg)')
 
-        # --- 7. Plot UH Contours (Swaths) ---
-        if ds_uh_max is not None:
-            uh_vals = ds_uh_max.values
-            # Only plot if there's actually data above 20
-            if np.nanmax(uh_vals) > 20:
-                cs_max = ax.contour(ds_uh_max.longitude, ds_uh_max.latitude, uh_vals,
-                                   levels=UH_MAX_LEVELS, colors=UH_MAX_COLORS, 
-                                   linewidths=2.5, transform=ccrs.PlateCarree(), zorder=15)
-                ax.clabel(cs_max, inline=True, fontsize=10, fmt='%d', colors='black')
-
-        if ds_uh_min is not None:
-            uh_min_vals = ds_uh_min.values
-            if np.nanmin(uh_min_vals) < -20:
-                cs_min = ax.contour(ds_uh_min.longitude, ds_uh_min.latitude, uh_min_vals,
-                                   levels=UH_MIN_LEVELS, colors=UH_MIN_COLORS, 
-                                   linewidths=2.0, linestyles='dashed', 
-                                   transform=ccrs.PlateCarree(), zorder=15)
-                ax.clabel(cs_min, inline=True, fontsize=10, fmt='%d', colors='black')
+        # --- 7. Plot UH Swaths (Color Fill) ---
+        if ds_uh is not None:
+            uh_vals = ds_uh.values
+            # Mask out values below 10 (Noise floor for Mean)
+            # 10 is a good "low" threshold for Mean UH to capture offshore/weak tracks
+            if np.nanmax(uh_vals) > 10:
+                print("       Plotting UH Swaths...")
+                uh_plot = ax.contourf(ds_uh.longitude, ds_uh.latitude, uh_vals,
+                                      levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
+                                      extend='max', transform=ccrs.PlateCarree(), zorder=15)
+                
+                # UH COLORBAR (RIGHT SIDE - Vertical)
+                # Create a new axis on the right side for the UH bar
+                cbar_ax = fig.add_axes([0.91, 0.15, 0.015, 0.7]) # [left, bottom, width, height]
+                cbar_uh = plt.colorbar(uh_plot, cax=cbar_ax, orientation='vertical', label='0-3km Updraft Helicity (m$^2$/s$^2$)')
 
         # --- 8. Legend ---
         legend_elements = [
@@ -199,12 +215,10 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             mlines.Line2D([], [], color='red', lw=3, label='1.5-3 km (850-700mb)'),
             mlines.Line2D([], [], color='green', lw=3, label='3-6 km (700-500mb)'),
             mlines.Line2D([], [], color='gold', lw=3, label='6-9 km (<500mb)'),
-            mlines.Line2D([], [], color='red', lw=2, label='0-3km UH (Max > 20)'),
-            mlines.Line2D([], [], color='blue', lw=2, linestyle='--', label='0-3km UH (Min < -20)'),
             mlines.Line2D([], [], color='black', lw=0.5, alpha=0.5, label='Rings: 20 kts') 
         ]
         
-        ax.legend(handles=legend_elements, loc='upper left', title="Hodograph & UH", 
+        ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers", 
                   framealpha=0.9, fontsize=11, title_fontsize=12).set_zorder(100)
 
         # --- 9. Plot Hodographs (Foreground) ---
@@ -270,7 +284,7 @@ if __name__ == "__main__":
     print(f"Starting HREF Hodograph + CAPE + UH generation for {date_str} {run}Z")
     
     # Force update print to trigger git change
-    print("Fixing UH variable detection...")
+    print("Applying Color Filled UH + Lower Thresholds (10+)...")
     
     for fhr in range(1, 49):
         process_forecast_hour(run_dt, date_str, run, fhr)
