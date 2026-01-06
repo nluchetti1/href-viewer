@@ -40,20 +40,11 @@ CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
 # --- MAX UH COLORS (Green Scale) ---
 UH_MAX_LEVELS = [25, 50, 75, 100, 150, 200, 250]
 uh_max_colors = [
-    (0.6, 1, 0.6, 0.4), (0.3, 0.9, 0.3, 0.6), (0, 0.7, 0, 0.7),
-    (0, 0.5, 0, 0.8), (0, 0.3, 0, 0.9), (0, 0, 0, 1.0)
+    (0.7, 1, 0.7, 0.5), (0.4, 0.9, 0.4, 0.6), (0, 0.8, 0, 0.7),
+    (0, 0.6, 0, 0.8), (0, 0.3, 0, 0.9), (0, 0, 0, 1.0)
 ]
 UH_MAX_CMAP = mcolors.ListedColormap(uh_max_colors)
 UH_MAX_NORM = mcolors.BoundaryNorm(UH_MAX_LEVELS, UH_MAX_CMAP.N)
-
-# --- MIN UH COLORS (Blue Scale) ---
-UH_MIN_LEVELS = [-250, -200, -150, -100, -75, -50, -25]
-uh_min_colors = [
-    (0, 0, 0, 1.0), (0, 0, 0.3, 0.9), (0, 0, 0.5, 0.8),
-    (0, 0, 0.7, 0.7), (0.2, 0.4, 1, 0.6), (0.5, 0.8, 1, 0.5)
-]
-UH_MIN_CMAP = mcolors.ListedColormap(uh_min_colors)
-UH_MIN_NORM = mcolors.BoundaryNorm(UH_MIN_LEVELS, UH_MIN_CMAP.N)
 
 def get_latest_run_time():
     now = datetime.datetime.utcnow()
@@ -126,10 +117,8 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         except: 
             pass
 
-        # --- LOAD PMMN DATA (BRUTE FORCE SCAN) ---
+        # --- LOAD PMMN DATA ---
         ds_uh_max = None
-        ds_uh_min = None
-
         if pmmn_file:
             try:
                 datasets = cfgrib.open_datasets(pmmn_file)
@@ -137,21 +126,15 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                     for var_name in ds.data_vars:
                         da = ds[var_name]
                         level_match = False
-
                         if 'heightAboveGroundLayer' in da.coords:
                             if da['heightAboveGroundLayer'].values == 5000:
                                 level_match = True
 
                         if level_match:
                             val_max = float(da.values.max())
-                            val_min = float(da.values.min())
-
                             if val_max > 20:
                                 ds_uh_max = da
-                                print(f" >> Found Candidate MAX UH (Val: {val_max:.1f})")
-                            if val_min < -20:
-                                ds_uh_min = da
-                                print(f" >> Found Candidate MIN UH (Val: {val_min:.1f})")
+                                print(f" >> Found Candidate MAX UH (Peak: {val_max:.1f})")
             except Exception as e:
                 print(f" PMMN Scan Error: {e}")
 
@@ -182,7 +165,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                                     levels=CAPE_LEVELS, cmap=CAPE_CMAP,
                                     extend='max', alpha=0.6, transform=ccrs.PlateCarree())
             ax.set_facecolor('white')
-            plt.colorbar(cape_plot, ax=ax, orientation='horizontal', pad=0.06,
+            plt.colorbar(cape_plot, ax=ax, orientation='horizontal', pad=0.04,
                          aspect=50, shrink=0.9, label='SBCAPE (J/kg)')
 
         # 2. Plot MAX UH
@@ -193,21 +176,11 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, vals,
                                        levels=UH_MAX_LEVELS, cmap=UH_MAX_CMAP, norm=UH_MAX_NORM,
                                        extend='max', transform=ccrs.PlateCarree(), zorder=15)
-                ax_cbar_max = fig.add_axes([0.15, 0.08, 0.33, 0.015])
-                plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='Max UH (>25)')
+                ax_cbar_max = fig.add_axes([0.3, 0.05, 0.4, 0.015])
+                plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', 
+                             label='Max UH (>25 m$^2$/s$^2$)')
 
-        # 3. Plot MIN UH
-        if ds_uh_min is not None:
-            vals = ds_uh_min.values
-            if np.nanmin(vals) < -25:
-                print(" Plotting Min UH Swaths...")
-                min_plot = ax.contourf(ds_uh_min.longitude, ds_uh_min.latitude, vals,
-                                       levels=UH_MIN_LEVELS, cmap=UH_MIN_CMAP, norm=UH_MIN_NORM,
-                                       extend='min', transform=ccrs.PlateCarree(), zorder=15)
-                ax_cbar_min = fig.add_axes([0.55, 0.08, 0.33, 0.015])
-                plt.colorbar(min_plot, cax=ax_cbar_min, orientation='horizontal', label='Min UH (<-25)')
-
-        # 4. Legend
+        # 3. Legend
         legend_elements = [
             mlines.Line2D([], [], color='magenta', lw=3, label='0-1.5 km'),
             mlines.Line2D([], [], color='red', lw=3, label='1.5-3 km'),
@@ -218,7 +191,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers",
                   framealpha=0.9, fontsize=11, title_fontsize=12).set_zorder(100)
 
-        # 5. Hodographs
+        # 4. Hodographs
         print(f" Plotted Hodographs...")
         lons = u.longitude.values
         lats = u.latitude.values
