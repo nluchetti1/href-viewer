@@ -1,59 +1,16 @@
 import xarray as xr
 import matplotlib.pyplot as plt
-import matplotlib.lines as mlines
-import matplotlib.colors as mcolors
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-from metpy.plots import Hodograph
-from metpy.units import units
-import numpy as np
-import datetime
-from datetime import timedelta
 import requests
 import os
 import sys
+import datetime
 import warnings
-import traceback
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
 # --- Configuration ---
-REGION = [-83.5, -75.5, 32.5, 37.5]   
-OUTPUT_DIR = "images"
-GRID_SPACING = 25             
-BOX_SIZE = 100000              
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
-
-# --- CAPE SETTINGS ---
-CAPE_LEVELS = np.arange(0, 5001, 250) 
-CAPE_COLORS = [
-    '#ffffff', '#f5f5f5', '#b0b0b0', '#808080', 
-    '#6495ed', '#4169e1', '#00bfff', '#40e0d0', 
-    '#adff2f', '#ffff00', '#ffda00', '#ffa500', 
-    '#ff8c00', '#ff4500', '#ff0000', '#b22222', 
-    '#8b0000', '#800080', '#9400d3', '#ff1493'
-]
-CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
-
-# --- UH SETTINGS (Color Fill) ---
-# Lower thresholds for Ensemble Mean (Mean smearing effect)
-UH_LEVELS = [10, 20, 30, 40, 50, 60, 70, 80, 100]
-# Custom "Swath" Colormap (Transparent -> Yellow -> Orange -> Red -> Black)
-# We create a list of RGBA colors.
-uh_colors = [
-    (1, 1, 0, 0.4),   # 10-20: Yellow (Semi-transparent)
-    (1, 0.8, 0, 0.5), # 20-30: Gold
-    (1, 0.6, 0, 0.6), # 30-40: Orange
-    (1, 0.4, 0, 0.7), # 40-50: Dark Orange
-    (1, 0, 0, 0.7),   # 50-60: Red
-    (0.8, 0, 0, 0.8), # 60-70: Dark Red
-    (0.6, 0, 0, 0.9), # 70-80: Maroon
-    (0.4, 0, 0, 1.0), # 80-100: Very Dark Red
-    (0, 0, 0, 1.0)    # 100+: Black
-]
-UH_CMAP = mcolors.ListedColormap(uh_colors)
-UH_NORM = mcolors.BoundaryNorm(UH_LEVELS, UH_CMAP.N)
 
 def get_latest_run_time():
     now = datetime.datetime.utcnow()
@@ -79,7 +36,7 @@ def download_href_mean(date_str, run, fhr):
     try:
         with requests.get(url, stream=True, timeout=60, headers=headers) as r:
             if r.status_code == 404:
-                print(f"File not found (404). Forecast f{fhr:02d} may not be ready yet.")
+                print(f"File not found. Forecast f{fhr:02d} may not be ready yet.")
                 return None
             r.raise_for_status()
             with open(filename, 'wb') as f:
@@ -90,201 +47,72 @@ def download_href_mean(date_str, run, fhr):
         print(f"Download failed: {e}")
         return None
 
-def get_segment_color(pressure_start, pressure_end):
-    avg_p = (pressure_start + pressure_end) / 2.0
-    if avg_p >= 850: return 'magenta'
-    elif 700 <= avg_p < 850: return 'red'
-    elif 500 <= avg_p < 700: return 'green'
-    else: return 'gold'
+def diagnose_grib_file(grib_file):
+    print("\n" + "="*60)
+    print(f"DIAGNOSTIC MODE: Scanning {grib_file}...")
+    print("="*60)
+    
+    try:
+        # open_datasets (PLURAL) forces it to read all distinct message types
+        datasets = xr.open_datasets(grib_file, engine='cfgrib')
+        
+        found_uh = False
+        
+        for i, ds in enumerate(datasets):
+            print(f"\n--- Dataset Part {i+1} ---")
+            for var_name in ds.data_vars:
+                da = ds[var_name]
+                attrs = da.attrs
+                
+                short_name = attrs.get('GRIB_shortName', 'unknown')
+                long_name = attrs.get('long_name', 'unknown')
+                level_type = attrs.get('GRIB_typeOfLevel', 'unknown')
+                
+                # Try to extract level info if it exists
+                # Different GRIB keys might hold the height info
+                level_desc = "N/A"
+                if 'heightAboveGroundLayer' in da.coords:
+                    level_desc = str(da['heightAboveGroundLayer'].values)
+                elif 'isobaricInhPa' in da.coords:
+                    level_desc = f"{da['isobaricInhPa'].values} mb"
+                elif 'surface' in da.coords:
+                    level_desc = "Surface"
+                elif 'heightAboveGround' in da.coords:
+                    level_desc = f"{da['heightAboveGround'].values} m"
+                
+                # Check for Helicity keywords
+                is_helicity = 'helicity' in long_name.lower() or 'uphl' in short_name.lower()
+                prefix = ">>> FOUND POSSIBLE MATCH: " if is_helicity else "    "
+                
+                print(f"{prefix}Var: {var_name:<10} | Short: {short_name:<10} | Level: {level_type:<25} | Range: {level_desc}")
 
-def plot_colored_hodograph(ax, u, v, levels):
-    for k in range(len(u) - 1):
-        p_start = levels[k]
-        p_end = levels[k+1]
-        color = get_segment_color(p_start, p_end)
-        ax.plot([u[k], u[k+1]], [v[k], v[k+1]], color=color, linewidth=3.0)
+        print("\n" + "="*60)
+        print("DIAGNOSTIC COMPLETE. Copy the lines above starting with '>>>' and paste them into the chat.")
+        print("="*60)
+
+    except Exception as e:
+        print(f"Diagnostic failed: {e}")
+        import traceback
+        traceback.print_exc()
 
 def process_forecast_hour(date_obj, date_str, run, fhr):
     grib_file = download_href_mean(date_str, run, fhr)
     if not grib_file:
         return
 
-    try:
-        print(f"[f{fhr:02d}] Loading GRIB data...")
-        
-        # --- 1. Load Winds ---
-        ds_u = xr.open_dataset(grib_file, engine='cfgrib', 
-                               filter_by_keys={'typeOfLevel': 'isobaricInhPa', 'shortName': 'u'})
-        ds_v = xr.open_dataset(grib_file, engine='cfgrib', 
-                               filter_by_keys={'typeOfLevel': 'isobaricInhPa', 'shortName': 'v'})
-        ds_wind = xr.merge([ds_u, ds_v])
-        
-        # --- 2. Load CAPE ---
-        ds_cape = None
-        try:
-            ds_cape = xr.open_dataset(grib_file, engine='cfgrib', 
-                                      filter_by_keys={'shortName': 'cape', 'typeOfLevel': 'surface'})
-        except:
-            pass
-
-        # --- 3. ROBUST UH LOADING (Brute Force) ---
-        ds_uh = None
-        
-        # Strategy 1: Look for 'mxuphl' (Max Updraft Helicity)
-        try:
-            ds_uh_raw = xr.open_dataset(grib_file, engine='cfgrib', 
-                                        backend_kwargs={'filter_by_keys': {'shortName': 'mxuphl'}})
-            if 'mxuphl' in ds_uh_raw:
-                ds_uh = ds_uh_raw['mxuphl']
-                print(f"       Found Max UH (mxuphl). Max val: {ds_uh.values.max():.2f}")
-        except Exception:
-            pass
-            
-        # Strategy 2: If finding by shortName failed, try finding by "unknown" param ID or stepType
-        # Sometimes 0-3km UH is labeled weirdly in GRIB tables
-        if ds_uh is None:
-            print("       'mxuphl' not found. Searching all variables...")
-            try:
-                # Open entire file without filter
-                full_ds = xr.open_dataset(grib_file, engine='cfgrib')
-                for var in full_ds.data_vars:
-                    attrs = full_ds[var].attrs
-                    name = attrs.get('long_name', '').lower()
-                    if 'helicity' in name and 'updraft' in name:
-                        print(f"       Found alternative UH variable: {var} ({attrs.get('long_name')})")
-                        ds_uh = full_ds[var]
-                        break
-            except Exception:
-                pass
-
-        # --- 4. Level Filtering ---
-        file_levels = ds_wind.isobaricInhPa.values
-        available_levels = sorted([l for l in REQUESTED_LEVELS if l in file_levels], reverse=True)
-        if len(available_levels) < 3: return
-        
-        ds_wind = ds_wind.sel(isobaricInhPa=available_levels)
-        u = ds_wind['u'].metpy.convert_units('kts')
-        v = ds_wind['v'].metpy.convert_units('kts')
-        level_values = available_levels
-
-        # --- 5. Plotting Setup ---
-        print(f"[f{fhr:02d}] Initializing Map...")
-        fig = plt.figure(figsize=(18, 12))
-        ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
-        ax.set_extent(REGION)
-        
-        ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
-        ax.add_feature(cfeature.BORDERS, linewidth=2.0, zorder=10)
-        ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
-
-        # --- 6. Plot CAPE (Background) ---
-        if ds_cape is not None:
-            cape_data = ds_cape['cape']
-            cape_vals = cape_data.values
-            cape_vals = np.where(cape_vals > 20000, 0, cape_vals)
-            cape_vals = np.nan_to_num(cape_vals, nan=0.0)
-            
-            cape_plot = ax.contourf(cape_data.longitude, cape_data.latitude, cape_vals, 
-                                    levels=CAPE_LEVELS, cmap=CAPE_CMAP, 
-                                    extend='max', alpha=0.6, transform=ccrs.PlateCarree())
-            
-            ax.set_facecolor('white')
-            # CAPE COLORBAR (BOTTOM)
-            cbar_cape = plt.colorbar(cape_plot, ax=ax, orientation='horizontal', pad=0.02, 
-                         aspect=50, shrink=0.8, label='SBCAPE (J/kg)')
-
-        # --- 7. Plot UH Swaths (Color Fill) ---
-        if ds_uh is not None:
-            uh_vals = ds_uh.values
-            # Mask out values below 10 (Noise floor for Mean)
-            # 10 is a good "low" threshold for Mean UH to capture offshore/weak tracks
-            if np.nanmax(uh_vals) > 10:
-                print("       Plotting UH Swaths...")
-                uh_plot = ax.contourf(ds_uh.longitude, ds_uh.latitude, uh_vals,
-                                      levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
-                                      extend='max', transform=ccrs.PlateCarree(), zorder=15)
-                
-                # UH COLORBAR (RIGHT SIDE - Vertical)
-                # Create a new axis on the right side for the UH bar
-                cbar_ax = fig.add_axes([0.91, 0.15, 0.015, 0.7]) # [left, bottom, width, height]
-                cbar_uh = plt.colorbar(uh_plot, cax=cbar_ax, orientation='vertical', label='0-3km Updraft Helicity (m$^2$/s$^2$)')
-
-        # --- 8. Legend ---
-        legend_elements = [
-            mlines.Line2D([], [], color='magenta', lw=3, label='0-1.5 km (>850mb)'),
-            mlines.Line2D([], [], color='red', lw=3, label='1.5-3 km (850-700mb)'),
-            mlines.Line2D([], [], color='green', lw=3, label='3-6 km (700-500mb)'),
-            mlines.Line2D([], [], color='gold', lw=3, label='6-9 km (<500mb)'),
-            mlines.Line2D([], [], color='black', lw=0.5, alpha=0.5, label='Rings: 20 kts') 
-        ]
-        
-        ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers", 
-                  framealpha=0.9, fontsize=11, title_fontsize=12).set_zorder(100)
-
-        # --- 9. Plot Hodographs (Foreground) ---
-        print(f"[f{fhr:02d}] Generating Colored Hodographs...")
-        lons = u.longitude.values
-        lats = u.latitude.values
-        u_data = u.values
-        v_data = v.values
-
-        counter = 0
-        for i in range(0, lons.shape[0], GRID_SPACING):
-            for j in range(0, lons.shape[1], GRID_SPACING):
-                
-                if np.isnan(u_data[:, i, j]).any(): continue
-                curr_lon = lons[i, j]
-                curr_lat = lats[i, j]
-                
-                check_lon = curr_lon - 360 if curr_lon > 180 else curr_lon
-                if not (REGION[0] < check_lon < REGION[1] and REGION[2] < curr_lat < REGION[3]):
-                    continue
-
-                try:
-                    proj_pnt = ax.projection.transform_point(curr_lon, curr_lat, ccrs.PlateCarree())
-                except: continue
-
-                bounds = [proj_pnt[0] - BOX_SIZE/2, proj_pnt[1] - BOX_SIZE/2, BOX_SIZE, BOX_SIZE]
-                sub_ax = ax.inset_axes(bounds, transform=ax.transData, zorder=20)
-                
-                h = Hodograph(sub_ax, component_range=80)
-                h.add_grid(increment=20, color='black', alpha=0.3, linewidth=0.5)
-                
-                plot_colored_hodograph(h.ax, u_data[:, i, j], v_data[:, i, j], level_values)
-                
-                sub_ax.set_xticklabels([])
-                sub_ax.set_yticklabels([])
-                sub_ax.axis('off')
-                counter += 1
-
-        print(f"[f{fhr:02d}] Plotted {counter} hodographs.")
-
-        # --- 10. Title ---
-        valid_time = date_obj + timedelta(hours=fhr)
-        valid_str = valid_time.strftime("%a %H:%MZ") 
-        plt.title(f"HREF Mean CAPE & 0-3km UH | Run: {date_str} {run}Z | Valid: {valid_str} (f{fhr:02d})", 
-                  fontsize=18, weight='bold')
-        
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        out_path = f"{OUTPUT_DIR}/href_hodo_cape_{date_str}_{run}z_f{fhr:02d}.png"
-        plt.savefig(out_path, bbox_inches='tight', dpi=90) 
-        print(f"Saved: {out_path}")
-        plt.close(fig)
-
-    except Exception as e:
-        print(f"Error processing f{fhr:02d}: {e}")
-        traceback.print_exc()
-    finally:
-        if os.path.exists(grib_file):
-            os.remove(grib_file)
+    # RUN DIAGNOSTIC AND QUIT
+    diagnose_grib_file(grib_file)
+    
+    # Clean up and exit so the log isn't huge
+    if os.path.exists(grib_file):
+        os.remove(grib_file)
+    sys.exit(0) 
 
 if __name__ == "__main__":
     date_str, run, date_obj = get_latest_run_time()
     run_dt = datetime.datetime.strptime(f"{date_str} {run}", "%Y%m%d %H")
-    print(f"Starting HREF Hodograph + CAPE + UH generation for {date_str} {run}Z")
+    print(f"Starting DIAGNOSTIC RUN for {date_str} {run}Z")
     
-    # Force update print to trigger git change
-    print("Applying Color Filled UH + Lower Thresholds (10+)...")
-    
-    for fhr in range(1, 49):
-        process_forecast_hour(run_dt, date_str, run, fhr)
+    # We only need to check ONE file to find the variable names
+    # Usually f01 or f02 has everything.
+    process_forecast_hour(run_dt, date_str, run, 1)
