@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HREF Hodograph Viewer</title>
+    <style>
+        body { font-family: sans-serif; background: #f0f0f0; margin: 0; display: flex; flex-direction: column; align-items: center; }
+        h2 { margin: 10px 0; }
+        
+        /* The Image Container */
+        #map-container {
+            width: 95%;
+            max-width: 1200px;
+            aspect-ratio: 18/12; /* Matches your Python figsize */
+            background: #ccc;
+            border: 2px solid #333;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        
+        #forecast-img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        /* The Hover Timeline Bar */
+        .timeline-container {
+            display: grid;
+            grid-template-columns: repeat(24, 1fr); /* 2 rows of 24 */
+            width: 95%;
+            max-width: 1200px;
+            gap: 2px;
+        }
+
+        .time-box {
+            background: #ddd;
+            border: 1px solid #999;
+            text-align: center;
+            font-size: 12px;
+            padding: 5px 0;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .time-box:hover, .time-box.active {
+            background: #007bff;
+            color: white;
+            font-weight: bold;
+        }
+
+        .controls { margin-bottom: 15px; }
+        .loading { font-style: italic; color: #666; }
+    </style>
+</head>
+<body>
+
+    <h2 id="page-title">HREF Hodograph Analysis (Live)</h2>
+    <div class="controls">
+        <span id="run-info">Loading...</span> | 
+        Use Mouse Hover or Left/Right Keys
+    </div>
+
+    <div id="map-container">
+        <img id="forecast-img" src="" alt="Select a forecast hour" onerror="this.style.display='none'">
+    </div>
+
+    <div class="timeline-container" id="timeline"></div>
+
+<script>
+    // CONFIGURATION
+    const totalHours = 48;
+    const imageDir = "images/";
+    
+    // Determine latest run based on current UTC time
+    const now = new Date();
+    const utcHour = now.getUTCHours();
+    
+    let runDate = now;
+    let runHour = '00';
+
+    // Logic to match your Python script's "get_latest_run_time"
+    // If it's past 15:00 UTC, we expect 12Z.
+    // If it's past 03:00 UTC, we expect 00Z.
+    if (utcHour >= 15) {
+        runHour = '12';
+    } else if (utcHour >= 3) {
+        runHour = '00';
+    } else {
+        // Before 3AM, we are still looking at yesterday's 12Z
+        runHour = '12';
+        runDate.setUTCDate(runDate.getUTCDate() - 1);
+    }
+
+    // Format YYYYMMDD
+    const yyyy = runDate.getUTCFullYear();
+    const mm = String(runDate.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(runDate.getUTCDate()).padStart(2, '0');
+    const dateStr = `${yyyy}${mm}${dd}`;
+
+    document.getElementById('run-info').textContent = `Run: ${dateStr} ${runHour}Z`;
+
+    const timeline = document.getElementById('timeline');
+    const imgElement = document.getElementById('forecast-img');
+    let boxes = [];
+
+    // Function to set image
+    function setImage(fhr) {
+        const fhrStr = String(fhr).padStart(2, '0');
+        const filename = `href_hodo_cape_${dateStr}_${runHour}z_f${fhrStr}.png`;
+        imgElement.src = imageDir + filename;
+        imgElement.style.display = 'block';
+
+        // Update active class
+        boxes.forEach(b => b.classList.remove('active'));
+        const activeBox = document.getElementById(`box-${fhr}`);
+        if(activeBox) activeBox.classList.add('active');
+    }
+
+    // Build the Timeline
+    for (let i = 1; i <= totalHours; i++) {
+        let box = document.createElement('div');
+        box.className = 'time-box';
+        box.textContent = `f${i}`;
+        box.id = `box-${i}`;
+        
+        // HOVER Event (Like NWS)
+        box.addEventListener('mouseenter', () => setImage(i));
+        // CLICK Event (for mobile)
+        box.addEventListener('click', () => setImage(i));
+
+        timeline.appendChild(box);
+        boxes.push(box);
+    }
+
+    // Load first image initially
+    setImage(1);
+
+    // Add Keyboard Support
+    document.addEventListener('keydown', (e) => {
+        let currentSrc = imgElement.src;
+        // Extract current fhr from filename
+        let match = currentSrc.match(/_f(\d+)\.png/);
+        if (!match) return;
+        
+        let currentFhr = parseInt(match[1]);
+
+        if (e.key === "ArrowRight") {
+            let next = currentFhr + 1;
+            if (next <= totalHours) setImage(next);
+        } else if (e.key === "ArrowLeft") {
+            let prev = currentFhr - 1;
+            if (prev >= 1) setImage(prev);
+        }
+    });
+
+</script>
+</body>
+</html>
