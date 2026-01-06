@@ -1,4 +1,5 @@
 import xarray as xr
+import cfgrib  # <--- Added this import
 import matplotlib.pyplot as plt
 import requests
 import os
@@ -53,10 +54,8 @@ def diagnose_grib_file(grib_file):
     print("="*60)
     
     try:
-        # open_datasets (PLURAL) forces it to read all distinct message types
-        datasets = xr.open_datasets(grib_file, engine='cfgrib')
-        
-        found_uh = False
+        # CORRECTED LINE: Use cfgrib directly to open multiple datasets
+        datasets = cfgrib.open_datasets(grib_file)
         
         for i, ds in enumerate(datasets):
             print(f"\n--- Dataset Part {i+1} ---")
@@ -68,8 +67,7 @@ def diagnose_grib_file(grib_file):
                 long_name = attrs.get('long_name', 'unknown')
                 level_type = attrs.get('GRIB_typeOfLevel', 'unknown')
                 
-                # Try to extract level info if it exists
-                # Different GRIB keys might hold the height info
+                # Extract level info
                 level_desc = "N/A"
                 if 'heightAboveGroundLayer' in da.coords:
                     level_desc = str(da['heightAboveGroundLayer'].values)
@@ -103,7 +101,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
     # RUN DIAGNOSTIC AND QUIT
     diagnose_grib_file(grib_file)
     
-    # Clean up and exit so the log isn't huge
     if os.path.exists(grib_file):
         os.remove(grib_file)
     sys.exit(0) 
@@ -114,5 +111,4 @@ if __name__ == "__main__":
     print(f"Starting DIAGNOSTIC RUN for {date_str} {run}Z")
     
     # We only need to check ONE file to find the variable names
-    # Usually f01 or f02 has everything.
     process_forecast_hour(run_dt, date_str, run, 1)
