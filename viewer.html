@@ -23,6 +23,7 @@
             color: #555; 
         }
 
+        /* TIMELINE BAR */
         .timeline-container {
             display: grid;
             grid-template-columns: repeat(24, 1fr);
@@ -61,32 +62,53 @@
             border-color: #0056b3;
         }
 
-        /* --- UPDATED MAP CONTAINER CSS --- */
+        /* MAP CONTAINER */
         #map-container {
             width: 100%;
             max-width: 1200px;
-            /* Removed aspect-ratio so it doesn't crop */
-            /* Removed overflow:hidden so nothing gets hidden */
             background: #fff;
             border: 1px solid #ccc;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 5px; /* Add a little padding inside the frame */
-            min-height: 400px; /* Prevents collapse while loading */
+            padding: 5px;
+            min-height: 400px;
+            position: relative; /* Needed for spinner positioning */
         }
         
         #forecast-img {
             width: 100%;
-            height: auto; /* Allow height to adjust automatically */
+            height: auto;
             display: block;
+            z-index: 2; /* Sits on top of spinner */
+            min-height: 400px; /* Prevents collapse */
         }
 
-        .loading-text {
+        /* LOADING SPINNER */
+        #loader {
             position: absolute;
-            color: #888;
+            z-index: 1; /* Sits behind image */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: #666;
             font-style: italic;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3; /* Light grey */
+            border-top: 4px solid #3498db; /* Blue */
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
 
     </style>
@@ -103,7 +125,11 @@
     <div class="timeline-container" id="timeline"></div>
 
     <div id="map-container">
-        <span class="loading-text">Loading Map...</span>
+        <div id="loader">
+            <div class="spinner"></div>
+            <span>Loading Map...</span>
+        </div>
+        
         <img id="forecast-img" src="" alt="Map Display" onerror="this.style.display='none'">
     </div>
 
@@ -112,6 +138,7 @@
     const totalHours = 48;
     const imageDir = "images/";
     
+    // --- DATE LOGIC ---
     const now = new Date();
     const utcHour = now.getUTCHours();
     
@@ -134,22 +161,36 @@
 
     document.getElementById('run-info').textContent = `Run: ${dateStr} ${runHour}Z`;
 
+    // --- ELEMENTS ---
     const timeline = document.getElementById('timeline');
     const imgElement = document.getElementById('forecast-img');
+    const loader = document.getElementById('loader');
     let boxes = [];
 
+    // --- IMAGE LOADING LOGIC ---
     function setImage(fhr) {
         const fhrStr = String(fhr).padStart(2, '0');
         const filename = `href_hodo_cape_${dateStr}_${runHour}z_f${fhrStr}.png`;
         
+        // 1. Show Spinner immediately
+        loader.style.display = 'flex';
+        
+        // 2. Start loading image
         imgElement.style.display = 'block';
         imgElement.src = imageDir + filename;
 
+        // 3. Update timeline highlighting
         boxes.forEach(b => b.classList.remove('active'));
         const activeBox = document.getElementById(`box-${fhr}`);
         if(activeBox) activeBox.classList.add('active');
     }
 
+    // 4. Hide Spinner ONLY when image is fully loaded
+    imgElement.onload = function() {
+        loader.style.display = 'none';
+    };
+
+    // --- BUILD TIMELINE ---
     for (let i = 1; i <= totalHours; i++) {
         let box = document.createElement('div');
         box.className = 'time-box';
@@ -163,8 +204,10 @@
         boxes.push(box);
     }
 
+    // Initialize
     setImage(1);
 
+    // Keyboard Controls
     document.addEventListener('keydown', (e) => {
         let currentSrc = imgElement.src;
         let match = currentSrc.match(/_f(\d+)\.png/);
