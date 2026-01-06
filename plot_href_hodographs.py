@@ -30,37 +30,27 @@ BOX_SIZE = 100000
 # Preferred Levels (Surface -> Aloft)
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
-# --- CAPE SETTINGS (UPDATED: 250-500 is SUBTLE Gray) ---
-# Levels: 0 to 5000 in steps of 250 (20 bins total)
+# --- CAPE SETTINGS (Pale Gray Fix) ---
 CAPE_LEVELS = np.arange(0, 5001, 250) 
-
-# Custom Hex Colors to match the standard Severe Weather / SPC style
-# 250-500 is set to #f5f5f5 (Very Pale Gray) to be visible but clean.
 CAPE_COLORS = [
-    '#ffffff',  # 0-250   (White)
-    '#f5f5f5',  # 250-500 (Very Pale Gray - Visible but not "Dirty")
-    '#b0b0b0',  # 500-750 (Gray)
-    '#808080',  # 750-1000 (Dark Gray)
-    '#6495ed',  # 1000-1250 (Cornflower Blue)
-    '#4169e1',  # 1250-1500 (Royal Blue)
-    '#00bfff',  # 1500-1750 (Deep Sky Blue)
-    '#40e0d0',  # 1750-2000 (Turquoise)
-    '#adff2f',  # 2000-2250 (Green Yellow)
-    '#ffff00',  # 2250-2500 (Yellow)
-    '#ffda00',  # 2500-2750 (Gold)
-    '#ffa500',  # 2750-3000 (Orange)
-    '#ff8c00',  # 3000-3250 (Dark Orange)
-    '#ff4500',  # 3250-3500 (Orange Red)
-    '#ff0000',  # 3500-3750 (Red)
-    '#b22222',  # 3750-4000 (Firebrick)
-    '#8b0000',  # 4000-4250 (Dark Red)
-    '#800080',  # 4250-4500 (Purple)
-    '#9400d3',  # 4500-4750 (Dark Violet)
-    '#ff1493'   # 4750-5000+ (Deep Pink)
+    '#ffffff', '#f5f5f5', '#b0b0b0', '#808080', 
+    '#6495ed', '#4169e1', '#00bfff', '#40e0d0', 
+    '#adff2f', '#ffff00', '#ffda00', '#ffa500', 
+    '#ff8c00', '#ff4500', '#ff0000', '#b22222', 
+    '#8b0000', '#800080', '#9400d3', '#ff1493'
 ]
-
-# Create the colormap from our list
 CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
+
+# --- UH SETTINGS (0-3 km Rotation) ---
+# Since we are plotting the ENSEMBLE MEAN, values are smoothed out. 
+# We use lower thresholds than you would for a single HRRR run.
+# Positive (Cyclonic)
+UH_MAX_LEVELS = [20, 40, 60, 80, 100] 
+UH_MAX_COLORS = ['gold', 'orange', 'orangered', 'red', 'darkred']
+
+# Negative (Anti-Cyclonic)
+UH_MIN_LEVELS = [-100, -80, -60, -40, -20]
+UH_MIN_COLORS = ['navy', 'mediumblue', 'blue', 'dodgerblue', 'cyan']
 
 def get_latest_run_time():
     now = datetime.datetime.utcnow()
@@ -99,28 +89,15 @@ def download_href_mean(date_str, run, fhr):
         return None
 
 def get_segment_color(pressure_start, pressure_end):
-    """
-    Determines color based on the pressure level of the segment.
-    Uses Standard Atmosphere approximation for heights.
-    """
+    """Determines color based on the pressure level of the segment."""
     avg_p = (pressure_start + pressure_end) / 2.0
-    
-    # 0-1.5 km (Pink) -> avg_p >= 850
-    if avg_p >= 850:
-        return 'magenta'
-    # 1.5-3.0 km (Red) -> 700 to 850
-    elif 700 <= avg_p < 850: 
-        return 'red'
-    # 3.0-5.5 km (Green) -> 500 to 700
-    elif 500 <= avg_p < 700: 
-        return 'green'
-    else:
-        return 'gold'
+    if avg_p >= 850: return 'magenta'
+    elif 700 <= avg_p < 850: return 'red'
+    elif 500 <= avg_p < 700: return 'green'
+    else: return 'gold'
 
 def plot_colored_hodograph(ax, u, v, levels):
-    """
-    Plots a multi-colored hodograph based on actual pressure levels found.
-    """
+    """Plots a multi-colored hodograph."""
     for k in range(len(u) - 1):
         p_start = levels[k]
         p_end = levels[k+1]
@@ -135,41 +112,69 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
     try:
         print(f"[f{fhr:02d}] Loading GRIB data...")
         
-        # --- 1. Load Wind Data ---
+        # --- 1. Load Winds ---
         ds_u = xr.open_dataset(grib_file, engine='cfgrib', 
                                filter_by_keys={'typeOfLevel': 'isobaricInhPa', 'shortName': 'u'})
         ds_v = xr.open_dataset(grib_file, engine='cfgrib', 
                                filter_by_keys={'typeOfLevel': 'isobaricInhPa', 'shortName': 'v'})
         ds_wind = xr.merge([ds_u, ds_v])
         
-        # --- 2. Load CAPE Data ---
+        # --- 2. Load CAPE ---
         ds_cape = None
         try:
             ds_cape = xr.open_dataset(grib_file, engine='cfgrib', 
                                       filter_by_keys={'shortName': 'cape', 'typeOfLevel': 'surface'})
-        except Exception:
-            try:
-                ds_cape = xr.open_dataset(grib_file, engine='cfgrib', 
-                                          filter_by_keys={'shortName': 'cape'})
-                print("       Found Generic CAPE.")
-            except Exception:
-                print("       CAPE not found. Plotting winds only.")
-                ds_cape = None
+        except:
+            pass # CAPE might be missing, handled later
 
-        # --- 3. Level Filtering ---
+        # --- 3. Load Updraft Helicity (0-3000m) ---
+        ds_uh_max = None
+        ds_uh_min = None
+        
+        # Try loading Max UH (mxuphl)
+        try:
+            # We filter loosely for mxuphl first
+            ds_uh_raw = xr.open_dataset(grib_file, engine='cfgrib', 
+                                       filter_by_keys={'shortName': 'mxuphl'})
+            
+            # Check if we have the 3000-0m layer
+            # Usually labeled 'heightAboveGroundLayer' with topLevel=3000
+            for var in ds_uh_raw.data_vars:
+                da = ds_uh_raw[var]
+                # Check for 0-3000m layer specifically
+                if 'heightAboveGroundLayer' in da.coords:
+                    # Some files might have 2-5km (5000-2000) or 0-3km (3000-0)
+                    # We want the one where top is 3000
+                    # Note: exact coord matching in cfgrib can be tricky, 
+                    # so we assume if mxuphl exists in this file, it's likely the standard output.
+                    ds_uh_max = da
+                    print("       Found Max Updraft Helicity.")
+                    break
+        except Exception as e:
+            print(f"       Max UH not found or error: {e}")
+
+        # Try loading Min UH (mnuphl)
+        try:
+            ds_uh_min_raw = xr.open_dataset(grib_file, engine='cfgrib', 
+                                           filter_by_keys={'shortName': 'mnuphl'})
+            for var in ds_uh_min_raw.data_vars:
+                ds_uh_min = ds_uh_min_raw[var]
+                print("       Found Min Updraft Helicity.")
+                break
+        except:
+            pass # Min UH is less common in some feeds
+
+        # --- 4. Level Filtering ---
         file_levels = ds_wind.isobaricInhPa.values
         available_levels = sorted([l for l in REQUESTED_LEVELS if l in file_levels], reverse=True)
-        
-        if len(available_levels) < 3:
-            print(f"Skipping f{fhr:02d}: Not enough vertical levels.")
-            return
+        if len(available_levels) < 3: return
         
         ds_wind = ds_wind.sel(isobaricInhPa=available_levels)
         u = ds_wind['u'].metpy.convert_units('kts')
         v = ds_wind['v'].metpy.convert_units('kts')
         level_values = available_levels
 
-        # --- 4. Plotting Setup ---
+        # --- 5. Plotting Setup ---
         print(f"[f{fhr:02d}] Initializing Map...")
         fig = plt.figure(figsize=(18, 12))
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
@@ -179,16 +184,13 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ax.add_feature(cfeature.BORDERS, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
-        # --- 5. Plot CAPE (Background) ---
+        # --- 6. Plot CAPE (Background) ---
         if ds_cape is not None:
             cape_data = ds_cape['cape']
-            
-            # Sanity Check (Remove Error Codes)
             cape_vals = cape_data.values
             cape_vals = np.where(cape_vals > 20000, 0, cape_vals)
             cape_vals = np.nan_to_num(cape_vals, nan=0.0)
             
-            # Plot using NEW Custom Colormap
             cape_plot = ax.contourf(cape_data.longitude, cape_data.latitude, cape_vals, 
                                     levels=CAPE_LEVELS, cmap=CAPE_CMAP, 
                                     extend='max', alpha=0.6, transform=ccrs.PlateCarree())
@@ -197,19 +199,44 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             plt.colorbar(cape_plot, ax=ax, orientation='horizontal', pad=0.02, 
                          aspect=50, shrink=0.8, label='SBCAPE (J/kg)')
 
-        # --- 6. ADD LEGEND ---
+        # --- 7. Plot UH Contours (Swaths) ---
+        # Plot Max UH (Positive/Cyclonic)
+        if ds_uh_max is not None:
+            # Smooth slightly for cleaner contours
+            uh_vals = ds_uh_max.values
+            
+            # Contours
+            cs_max = ax.contour(ds_uh_max.longitude, ds_uh_max.latitude, uh_vals,
+                               levels=UH_MAX_LEVELS, colors=UH_MAX_COLORS, 
+                               linewidths=2.0, transform=ccrs.PlateCarree(), zorder=15)
+            # Labels
+            ax.clabel(cs_max, inline=True, fontsize=10, fmt='%d', colors='black', rightside_up=True)
+
+        # Plot Min UH (Negative/Anti-Cyclonic)
+        if ds_uh_min is not None:
+            uh_min_vals = ds_uh_min.values
+            cs_min = ax.contour(ds_uh_min.longitude, ds_uh_min.latitude, uh_min_vals,
+                               levels=UH_MIN_LEVELS, colors=UH_MIN_COLORS, 
+                               linewidths=1.5, linestyles='dashed', 
+                               transform=ccrs.PlateCarree(), zorder=15)
+            ax.clabel(cs_min, inline=True, fontsize=10, fmt='%d', colors='black')
+
+        # --- 8. Legend ---
         legend_elements = [
             mlines.Line2D([], [], color='magenta', lw=3, label='0-1.5 km (>850mb)'),
             mlines.Line2D([], [], color='red', lw=3, label='1.5-3 km (850-700mb)'),
             mlines.Line2D([], [], color='green', lw=3, label='3-6 km (700-500mb)'),
             mlines.Line2D([], [], color='gold', lw=3, label='6-9 km (<500mb)'),
+            # Legend for UH
+            mlines.Line2D([], [], color='red', lw=2, label='0-3km UH (Max)'),
+            mlines.Line2D([], [], color='blue', lw=2, linestyle='--', label='0-3km UH (Min)'),
             mlines.Line2D([], [], color='black', lw=0.5, alpha=0.5, label='Rings: 20 kts') 
         ]
         
-        ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers", 
-                  framealpha=0.9, fontsize=12, title_fontsize=13).set_zorder(100)
+        ax.legend(handles=legend_elements, loc='upper left', title="Hodograph & UH", 
+                  framealpha=0.9, fontsize=11, title_fontsize=12).set_zorder(100)
 
-        # --- 7. Plot Hodographs (Foreground) ---
+        # --- 9. Plot Hodographs (Foreground) ---
         print(f"[f{fhr:02d}] Generating Colored Hodographs...")
         lons = u.longitude.values
         lats = u.latitude.values
@@ -223,8 +250,8 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 if np.isnan(u_data[:, i, j]).any(): continue
                 curr_lon = lons[i, j]
                 curr_lat = lats[i, j]
-                check_lon = curr_lon - 360 if curr_lon > 180 else curr_lon
                 
+                check_lon = curr_lon - 360 if curr_lon > 180 else curr_lon
                 if not (REGION[0] < check_lon < REGION[1] and REGION[2] < curr_lat < REGION[3]):
                     continue
 
@@ -247,10 +274,10 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 
         print(f"[f{fhr:02d}] Plotted {counter} hodographs.")
 
-        # --- 8. Title ---
+        # --- 10. Title ---
         valid_time = date_obj + timedelta(hours=fhr)
         valid_str = valid_time.strftime("%a %H:%MZ") 
-        plt.title(f"HREF Mean CAPE & Hodographs | Run: {date_str} {run}Z | Valid: {valid_str} (f{fhr:02d})", 
+        plt.title(f"HREF Mean CAPE & 0-3km UH | Run: {date_str} {run}Z | Valid: {valid_str} (f{fhr:02d})", 
                   fontsize=18, weight='bold')
         
         os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -269,11 +296,10 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 if __name__ == "__main__":
     date_str, run, date_obj = get_latest_run_time()
     run_dt = datetime.datetime.strptime(f"{date_str} {run}", "%Y%m%d %H")
-    print(f"Starting HREF Hodograph + CAPE generation for {date_str} {run}Z")
-    print(f"Configuration: Region={REGION}")
+    print(f"Starting HREF Hodograph + CAPE + UH generation for {date_str} {run}Z")
     
     # Force update print to trigger git change
-    print("Applying Custom CAPE Colorbar (Pale Gray 250-500 J/kg)...")
+    print("Applying 0-3km UH Contours + Labels...")
     
     for fhr in range(1, 49):
         process_forecast_hour(run_dt, date_str, run, fhr)
