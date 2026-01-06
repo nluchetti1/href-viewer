@@ -5,21 +5,77 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HREF Hodograph Viewer</title>
     <style>
-        body { font-family: sans-serif; background: #f0f0f0; margin: 0; display: flex; flex-direction: column; align-items: center; }
-        h2 { margin: 10px 0; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: #f4f4f9; 
+            margin: 0; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            padding: 20px;
+        }
         
-        /* The Image Container */
-        #map-container {
-            width: 95%;
+        h2 { margin: 5px 0; color: #333; }
+        
+        /* CONTROLS & INFO */
+        .controls { 
+            margin-bottom: 10px; 
+            font-size: 14px; 
+            color: #555; 
+        }
+
+        /* TIMELINE (Moved to TOP) */
+        .timeline-container {
+            display: grid;
+            grid-template-columns: repeat(24, 1fr); /* 2 rows of 24 boxes */
+            width: 100%;
             max-width: 1200px;
-            aspect-ratio: 18/12; /* Matches your Python figsize */
-            background: #ccc;
-            border: 2px solid #333;
-            margin-bottom: 10px;
+            gap: 2px;
+            margin-bottom: 15px; /* Space between time bar and map */
+            background: #fff;
+            padding: 5px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .time-box {
+            background: #e9ecef;
+            border: 1px solid #ced4da;
+            text-align: center;
+            font-size: 11px;
+            padding: 6px 0;
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.1s ease;
+        }
+
+        .time-box:hover {
+            background: #4dabf7;
+            color: white;
+            border-color: #339af0;
+            transform: translateY(-2px); /* Pop up slightly */
+        }
+
+        .time-box.active {
+            background: #007bff;
+            color: white;
+            font-weight: bold;
+            border-color: #0056b3;
+        }
+
+        /* MAP CONTAINER */
+        #map-container {
+            width: 100%;
+            max-width: 1200px;
+            aspect-ratio: 18/12; 
+            background: #fff;
+            border: 1px solid #ccc;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             display: flex;
             align-items: center;
             justify-content: center;
             overflow: hidden;
+            position: relative;
         }
         
         #forecast-img {
@@ -28,48 +84,30 @@
             display: block;
         }
 
-        /* The Hover Timeline Bar */
-        .timeline-container {
-            display: grid;
-            grid-template-columns: repeat(24, 1fr); /* 2 rows of 24 */
-            width: 95%;
-            max-width: 1200px;
-            gap: 2px;
+        /* Loading Spinner placeholder */
+        .loading-text {
+            position: absolute;
+            color: #888;
+            font-style: italic;
         }
 
-        .time-box {
-            background: #ddd;
-            border: 1px solid #999;
-            text-align: center;
-            font-size: 12px;
-            padding: 5px 0;
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .time-box:hover, .time-box.active {
-            background: #007bff;
-            color: white;
-            font-weight: bold;
-        }
-
-        .controls { margin-bottom: 15px; }
-        .loading { font-style: italic; color: #666; }
     </style>
 </head>
 <body>
 
     <h2 id="page-title">HREF Hodograph Analysis (Live)</h2>
+    
     <div class="controls">
         <span id="run-info">Loading...</span> | 
-        Use Mouse Hover or Left/Right Keys
-    </div>
-
-    <div id="map-container">
-        <img id="forecast-img" src="" alt="Select a forecast hour" onerror="this.style.display='none'">
+        <strong>Hover</strong> to preview, <strong>Click</strong> to lock, or use <strong>Arrow Keys</strong>.
     </div>
 
     <div class="timeline-container" id="timeline"></div>
+
+    <div id="map-container">
+        <span class="loading-text">Loading Map...</span>
+        <img id="forecast-img" src="" alt="Map Display" onerror="this.style.display='none'">
+    </div>
 
 <script>
     // CONFIGURATION
@@ -83,15 +121,15 @@
     let runDate = now;
     let runHour = '00';
 
-    // Logic to match your Python script's "get_latest_run_time"
-    // If it's past 15:00 UTC, we expect 12Z.
-    // If it's past 03:00 UTC, we expect 00Z.
+    // Logic: 
+    // If > 15:00 UTC -> Show today's 12Z
+    // If > 03:00 UTC -> Show today's 00Z
+    // Else -> Show yesterday's 12Z
     if (utcHour >= 15) {
         runHour = '12';
     } else if (utcHour >= 3) {
         runHour = '00';
     } else {
-        // Before 3AM, we are still looking at yesterday's 12Z
         runHour = '12';
         runDate.setUTCDate(runDate.getUTCDate() - 1);
     }
@@ -112,38 +150,37 @@
     function setImage(fhr) {
         const fhrStr = String(fhr).padStart(2, '0');
         const filename = `href_hodo_cape_${dateStr}_${runHour}z_f${fhrStr}.png`;
-        imgElement.src = imageDir + filename;
+        
         imgElement.style.display = 'block';
+        imgElement.src = imageDir + filename;
 
-        // Update active class
+        // Update active class styling
         boxes.forEach(b => b.classList.remove('active'));
         const activeBox = document.getElementById(`box-${fhr}`);
         if(activeBox) activeBox.classList.add('active');
     }
 
-    // Build the Timeline
+    // Build the Timeline Grid
     for (let i = 1; i <= totalHours; i++) {
         let box = document.createElement('div');
         box.className = 'time-box';
         box.textContent = `f${i}`;
         box.id = `box-${i}`;
         
-        // HOVER Event (Like NWS)
+        // INTERACTION: Hover = Preview, Click = set
         box.addEventListener('mouseenter', () => setImage(i));
-        // CLICK Event (for mobile)
         box.addEventListener('click', () => setImage(i));
 
         timeline.appendChild(box);
         boxes.push(box);
     }
 
-    // Load first image initially
+    // Initialize with first image
     setImage(1);
 
-    // Add Keyboard Support
+    // Keyboard Navigation (Left/Right Arrows)
     document.addEventListener('keydown', (e) => {
         let currentSrc = imgElement.src;
-        // Extract current fhr from filename
         let match = currentSrc.match(/_f(\d+)\.png/);
         if (!match) return;
         
