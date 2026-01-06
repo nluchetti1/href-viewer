@@ -37,14 +37,14 @@ CAPE_COLORS = [
 ]
 CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
 
-# --- MAX UH COLORS (Green Scale) ---
-UH_MAX_LEVELS = [25, 50, 75, 100, 150, 200, 250]
-uh_max_colors = [
-    (0.7, 1, 0.7, 0.5), (0.4, 0.9, 0.4, 0.6), (0, 0.8, 0, 0.7),
-    (0, 0.6, 0, 0.8), (0, 0.3, 0, 0.9), (0, 0, 0, 1.0)
+# --- UH COLORS (Green Scale - Positive Only) ---
+UH_LEVELS = [25, 50, 75, 100, 150, 200, 250]
+uh_colors = [
+    (0.6, 1, 0.6, 0.5), (0.3, 0.9, 0.3, 0.6), (0, 0.7, 0, 0.7),
+    (0, 0.5, 0, 0.8), (0, 0.3, 0, 0.9), (0, 0, 0, 1.0)
 ]
-UH_MAX_CMAP = mcolors.ListedColormap(uh_max_colors)
-UH_MAX_NORM = mcolors.BoundaryNorm(UH_MAX_LEVELS, UH_MAX_CMAP.N)
+UH_CMAP = mcolors.ListedColormap(uh_colors)
+UH_NORM = mcolors.BoundaryNorm(UH_LEVELS, UH_CMAP.N)
 
 def get_latest_run_time():
     now = datetime.datetime.utcnow()
@@ -117,24 +117,23 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         except: 
             pass
 
-        # --- LOAD PMMN DATA ---
-        ds_uh_max = None
+        # --- LOAD PMMN UH ---
+        ds_uh = None
         if pmmn_file:
             try:
                 datasets = cfgrib.open_datasets(pmmn_file)
                 for ds in datasets:
                     for var_name in ds.data_vars:
                         da = ds[var_name]
-                        level_match = False
                         if 'heightAboveGroundLayer' in da.coords:
                             if da['heightAboveGroundLayer'].values == 5000:
-                                level_match = True
-
-                        if level_match:
-                            val_max = float(da.values.max())
-                            if val_max > 20:
-                                ds_uh_max = da
-                                print(f" >> Found Candidate MAX UH (Peak: {val_max:.1f})")
+                                val_max = float(da.values.max())
+                                if val_max > 20:
+                                    ds_uh = da
+                                    print(f" >> Found UH Variable (Max: {val_max:.1f})")
+                                    break
+                    if ds_uh is not None: 
+                        break
             except Exception as e:
                 print(f" PMMN Scan Error: {e}")
 
@@ -168,17 +167,17 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             plt.colorbar(cape_plot, ax=ax, orientation='horizontal', pad=0.04,
                          aspect=50, shrink=0.9, label='SBCAPE (J/kg)')
 
-        # 2. Plot MAX UH
-        if ds_uh_max is not None:
-            vals = ds_uh_max.values
+        # 2. Plot UH
+        if ds_uh is not None:
+            vals = ds_uh.values
             if np.nanmax(vals) > 25:
-                print(" Plotting Max UH Swaths...")
-                max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, vals,
-                                       levels=UH_MAX_LEVELS, cmap=UH_MAX_CMAP, norm=UH_MAX_NORM,
+                print(" Plotting UH Swaths...")
+                uh_plot = ax.contourf(ds_uh.longitude, ds_uh.latitude, vals,
+                                       levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
                                        extend='max', transform=ccrs.PlateCarree(), zorder=15)
-                ax_cbar_max = fig.add_axes([0.3, 0.05, 0.4, 0.015])
-                plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', 
-                             label='Max UH (>25 m$^2$/s$^2$)')
+                ax_cbar_uh = fig.add_axes([0.3, 0.05, 0.4, 0.015])
+                plt.colorbar(uh_plot, cax=ax_cbar_uh, orientation='horizontal', 
+                             label='2-5km Updraft Helicity (m$^2$/s$^2$)')
 
         # 3. Legend
         legend_elements = [
@@ -204,7 +203,8 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 curr_lon = lons[i, j]
                 curr_lat = lats[i, j]
                 check_lon = curr_lon - 360 if curr_lon > 180 else curr_lon
-                if not (REGION[0] < check_lon < REGION[1] and REGION[2] < curr_lat < REGION[3]): continue
+                if not (REGION[0] < check_lon < REGION[1] and REGION[2] < curr_lat < REGION[3]): 
+                    continue
                 try:
                     proj_pnt = ax.projection.transform_point(curr_lon, curr_lat, ccrs.PlateCarree())
                     bounds = [proj_pnt[0] - BOX_SIZE/2, proj_pnt[1] - BOX_SIZE/2, BOX_SIZE, BOX_SIZE]
@@ -213,7 +213,8 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                     h.add_grid(increment=20, color='black', alpha=0.3, linewidth=0.5)
                     plot_colored_hodograph(h.ax, u_data[:, i, j], v_data[:, i, j], level_values)
                     sub_ax.axis('off')
-                except: continue
+                except: 
+                    continue
 
         # Save
         valid_time = date_obj + timedelta(hours=fhr)
