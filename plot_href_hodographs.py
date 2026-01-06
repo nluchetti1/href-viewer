@@ -30,15 +30,15 @@ BOX_SIZE = 100000
 # Preferred Levels (Surface -> Aloft)
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
-# --- CAPE SETTINGS (UPDATED COLOR BAR) ---
+# --- CAPE SETTINGS (UPDATED: 250-500 is SUBTLE Gray) ---
 # Levels: 0 to 5000 in steps of 250 (20 bins total)
 CAPE_LEVELS = np.arange(0, 5001, 250) 
 
 # Custom Hex Colors to match the standard Severe Weather / SPC style
-# Sequence: White -> Greys -> Blues -> Teals -> Yellows -> Oranges -> Reds -> Purples
+# 250-500 is set to #f5f5f5 (Very Pale Gray) to be visible but clean.
 CAPE_COLORS = [
-    '#ffffff',  # 0-250 (White)
-    '#e0e0e0',  # 250-500 (Light Gray)
+    '#ffffff',  # 0-250   (White)
+    '#f5f5f5',  # 250-500 (Very Pale Gray - Visible but not "Dirty")
     '#b0b0b0',  # 500-750 (Gray)
     '#808080',  # 750-1000 (Dark Gray)
     '#6495ed',  # 1000-1250 (Cornflower Blue)
@@ -273,7 +273,7 @@ if __name__ == "__main__":
     print(f"Configuration: Region={REGION}")
     
     # Force update print to trigger git change
-    print("Applying Custom CAPE Colorbar (Grey->Blue->Yellow->Red)...")
+    print("Applying Custom CAPE Colorbar (Pale Gray 250-500 J/kg)...")
     
     for fhr in range(1, 49):
         process_forecast_hour(run_dt, date_str, run, fhr)
