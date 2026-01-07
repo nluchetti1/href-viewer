@@ -17,7 +17,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         token: ${{ secrets.ACTION_TOKEN }}
-        fetch-depth: 0  # <--- THIS IS THE FIX for the red "Failed" error
+        fetch-depth: 0  # Critical for avoiding history conflicts
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -38,17 +38,23 @@ jobs:
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         
-        # Remove junk files
+        # Remove junk index files if they exist
         rm -f *.idx
         
-        # Add the new images
-        git add images/*.png
+        # CRITICAL FIX: Stage ALL changes (New files + Deleted files)
+        # This ensures the 'cleanup' from your script is actually recorded in Git
+        git add -A
         
-        # Commit
-        git commit -m "Auto-update HREF plots for $(date -u)" || echo "No changes to commit"
-        
-        # Pull latest changes to resolve any conflicts
-        git pull --rebase
-        
-        # Push
-        git push
+        # Check if we actually have changes before trying to commit
+        if git diff --staged --quiet; then
+          echo "No changes to commit."
+        else
+          # Commit the changes (Deletions + New Files)
+          git commit -m "Auto-update HREF plots for $(date -u)"
+          
+          # Pull latest changes (Rebase keeps history clean)
+          git pull --rebase
+          
+          # Push to repository
+          git push
+        fi
