@@ -102,29 +102,17 @@ def plot_colored_hodograph(ax, u, v, levels):
         ax.plot([u[k], u[k+1]], [v[k], v[k+1]], color=color, linewidth=3.0)
 
 def cleanup_old_runs(current_date, current_run):
-    """
-    Removes images from previous runs.
-    Keeps only files matching the CURRENT date and run.
-    """
     print("\n" + "="*40)
     print("CLEANUP: Removing old run data...")
-    
-    # Current filename pattern prefix
-    # e.g. "images/href_hodo_cape_20260107_00z"
     current_prefix = f"href_hodo_cape_{current_date}_{current_run}z"
-    
-    # List all PNGs in the images folder
     all_files = glob.glob(os.path.join(OUTPUT_DIR, "href_hodo_cape_*.png"))
     
     removed_count = 0
     for filepath in all_files:
         filename = os.path.basename(filepath)
-        
-        # If the file does NOT start with the current run string, delete it.
         if not filename.startswith(current_prefix):
             try:
                 os.remove(filepath)
-                # print(f"  Deleted: {filename}") # Uncomment for verbose logging
                 removed_count += 1
             except Exception as e:
                 print(f"  Error deleting {filename}: {e}")
@@ -184,42 +172,61 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 
         print(f"       Generating Map...")
         
-        fig = plt.figure(figsize=(16, 12)) 
+        # 1. FIGURE SETUP (White Background enforced)
+        fig = plt.figure(figsize=(16, 12), facecolor='white') # Force Figure White
         fig.subplots_adjust(bottom=0.18, top=0.93)
 
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
         ax.set_extent(REGION)
         
+        # 2. AXIS BACKGROUND (White Background enforced)
         ax.set_facecolor('white')
+        
+        # 3. FEATURES (Force White Land/Ocean to cover holes)
+        ax.add_feature(cfeature.LAND, facecolor='white', zorder=0)
+        ax.add_feature(cfeature.OCEAN, facecolor='white', zorder=0)
         
         ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.BORDERS, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
         # 1. Plot CAPE
+        cape_plotted = False
         if ds_cape is not None:
             cape_data = ds_cape['cape']
             cape_vals = np.nan_to_num(cape_data.values, nan=0.0)
-            cape_plot = ax.contourf(cape_data.longitude, cape_data.latitude, cape_vals, 
-                                    levels=CAPE_LEVELS, cmap=CAPE_CMAP, 
-                                    extend='max', alpha=0.6, transform=ccrs.PlateCarree())
             
-            ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
-            plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal', label='SBCAPE (J/kg)')
-        else:
-            print("       [!] Skipping CAPE Plot (Data Missing)")
+            # CHECK INTEGRITY: If max CAPE is effectively 0, don't plot contourf (avoids gray box)
+            if np.max(cape_vals) > 10:
+                try:
+                    cape_plot = ax.contourf(cape_data.longitude, cape_data.latitude, cape_vals, 
+                                            levels=CAPE_LEVELS, cmap=CAPE_CMAP, 
+                                            extend='max', alpha=0.6, transform=ccrs.PlateCarree())
+                    
+                    ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
+                    plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal', label='SBCAPE (J/kg)')
+                    cape_plotted = True
+                except Exception as e:
+                    print(f"       [!] Plotting CAPE failed: {e}")
+            else:
+                print("       [!] CAPE data empty (Max < 10). Skipping contours.")
+        
+        if not cape_plotted:
+            print("       [!] Map will be blank (White) background.")
 
         # 2. Plot MAX UH
         if ds_uh_max is not None:
             uh_vals = ds_uh_max.values
             if np.nanmax(uh_vals) > 20:
                 print("       Plotting Max UH Swaths (Green)...")
-                max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_vals,
-                                      levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
-                                      extend='max', transform=ccrs.PlateCarree(), zorder=15)
-                
-                ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
-                plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='2-5km Max UH (>25 m$^2$/s$^2$)')
+                try:
+                    max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_vals,
+                                          levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
+                                          extend='max', transform=ccrs.PlateCarree(), zorder=15)
+                    
+                    ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
+                    plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='2-5km Max UH (>25 m$^2$/s$^2$)')
+                except: pass
 
         # 4. Legend
         legend_elements = [
@@ -285,5 +292,5 @@ if __name__ == "__main__":
     for fhr in range(1, 49):
         process_forecast_hour(run_dt, date_str, run, fhr)
     
-    # 2. REMOVE OLD RUNS (Only happens if loop finishes)
+    # 2. REMOVE OLD RUNS
     cleanup_old_runs(date_str, run)
