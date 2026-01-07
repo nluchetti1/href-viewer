@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HREF Hodograph Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <style>
         body { 
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
@@ -21,7 +22,25 @@
             margin-bottom: 10px; 
             font-size: 14px; 
             color: #555; 
+            display: flex;
+            align-items: center;
+            gap: 15px;
         }
+
+        button#download-btn {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        button#download-btn:hover { background-color: #218838; }
+        button#download-btn:disabled { background-color: #ccc; cursor: not-allowed; }
 
         /* TIMELINE BAR */
         .timeline-container {
@@ -74,21 +93,21 @@
             justify-content: center;
             padding: 5px;
             min-height: 400px;
-            position: relative; /* Needed for spinner positioning */
+            position: relative; 
         }
         
         #forecast-img {
             width: 100%;
             height: auto;
             display: block;
-            z-index: 2; /* Sits on top of spinner */
-            min-height: 400px; /* Prevents collapse */
+            z-index: 2; 
+            min-height: 400px; 
         }
 
         /* LOADING SPINNER */
         #loader {
             position: absolute;
-            z-index: 1; /* Sits behind image */
+            z-index: 1; 
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -97,8 +116,8 @@
         }
 
         .spinner {
-            border: 4px solid #f3f3f3; /* Light grey */
-            border-top: 4px solid #3498db; /* Blue */
+            border: 4px solid #f3f3f3; 
+            border-top: 4px solid #3498db; 
             border-radius: 50%;
             width: 40px;
             height: 40px;
@@ -119,7 +138,8 @@
     
     <div class="controls">
         <span id="run-info">Loading...</span> | 
-        <strong>Hover</strong> to preview, <strong>Click</strong> to lock, or use <strong>Arrow Keys</strong>.
+        <span><strong>Hover</strong>/<strong>Click</strong> to view, <strong>Arrows</strong> to navigate.</span>
+        <button id="download-btn" onclick="generateGIF()">Download Animated GIF</button>
     </div>
 
     <div class="timeline-container" id="timeline"></div>
@@ -165,6 +185,7 @@
     const timeline = document.getElementById('timeline');
     const imgElement = document.getElementById('forecast-img');
     const loader = document.getElementById('loader');
+    const btn = document.getElementById('download-btn');
     let boxes = [];
 
     // --- IMAGE LOADING LOGIC ---
@@ -172,20 +193,15 @@
         const fhrStr = String(fhr).padStart(2, '0');
         const filename = `href_hodo_cape_${dateStr}_${runHour}z_f${fhrStr}.png`;
         
-        // 1. Show Spinner immediately
         loader.style.display = 'flex';
-        
-        // 2. Start loading image
         imgElement.style.display = 'block';
         imgElement.src = imageDir + filename;
 
-        // 3. Update timeline highlighting
         boxes.forEach(b => b.classList.remove('active'));
         const activeBox = document.getElementById(`box-${fhr}`);
         if(activeBox) activeBox.classList.add('active');
     }
 
-    // 4. Hide Spinner ONLY when image is fully loaded
     imgElement.onload = function() {
         loader.style.display = 'none';
     };
@@ -204,7 +220,6 @@
         boxes.push(box);
     }
 
-    // Initialize
     setImage(1);
 
     // Keyboard Controls
@@ -223,6 +238,77 @@
             if (prev >= 1) setImage(prev);
         }
     });
+
+    // --- GIF GENERATION LOGIC ---
+    async function generateGIF() {
+        btn.disabled = true;
+        btn.textContent = "Generating GIF (0%)...";
+        
+        try {
+            // Initialize GIF object
+            // workers: 2 -> uses 2 CPU threads
+            // quality: 10 -> Lower is better quality but slower (10 is good balance)
+            const gif = new GIF({
+                workers: 2,
+                quality: 10,
+                width: imgElement.naturalWidth || 1200, // Use image dimensions
+                height: imgElement.naturalHeight || 800
+            });
+
+            // Loop through all 48 frames
+            for (let i = 1; i <= totalHours; i++) {
+                const fhrStr = String(i).padStart(2, '0');
+                const filename = `href_hodo_cape_${dateStr}_${runHour}z_f${fhrStr}.png`;
+                const url = imageDir + filename;
+                
+                // Load image manually
+                const img = new Image();
+                img.crossOrigin = "Anonymous"; // Important for CORS if needed
+                
+                // Wrap loading in a promise to wait for it
+                await new Promise((resolve, reject) => {
+                    img.onload = () => {
+                        gif.addFrame(img, {delay: 250}); // 250ms delay = 4 frames per second
+                        resolve();
+                    };
+                    img.onerror = () => {
+                        console.warn(`Skipping missing frame: ${filename}`);
+                        resolve(); // Skip missing frames but keep going
+                    };
+                    img.src = url;
+                });
+
+                // Update Button Text
+                const percent = Math.round((i / totalHours) * 100);
+                btn.textContent = `Generating GIF (${percent}%)...`;
+            }
+
+            btn.textContent = "Rendering...";
+
+            // Finish GIF
+            gif.on('finished', function(blob) {
+                // Create a download link automatically
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `href_loop_${dateStr}_${runHour}z.gif`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                // Reset Button
+                btn.textContent = "Download Animated GIF";
+                btn.disabled = false;
+            });
+
+            gif.render();
+
+        } catch (e) {
+            console.error(e);
+            alert("Error generating GIF. Check console.");
+            btn.textContent = "Download Animated GIF";
+            btn.disabled = false;
+        }
+    }
 
 </script>
 </body>
