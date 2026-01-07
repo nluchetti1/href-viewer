@@ -39,10 +39,9 @@ CAPE_COLORS = [
 CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
 
 # --- UH COLORS (Green Scale - Positive Only) ---
-# 25 to 250 m2/s2
 UH_LEVELS = [25, 50, 75, 100, 150, 200, 250]
 uh_colors = [
-    (0.6, 1, 0.6, 0.5),   # 25-50:  Pale Green (Semi-transparent)
+    (0.6, 1, 0.6, 0.5),   # 25-50:  Pale Green
     (0.3, 0.9, 0.3, 0.6), # 50-75:  Light Green
     (0, 0.7, 0, 0.7),     # 75-100: Medium Green
     (0, 0.5, 0, 0.8),     # 100-150: Dark Green
@@ -114,14 +113,13 @@ def cleanup_old_runs(current_date, current_run):
             try:
                 os.remove(filepath)
                 removed_count += 1
-            except Exception as e:
-                print(f"  Error deleting {filename}: {e}")
+            except Exception:
+                pass
                 
     print(f"Cleanup Complete. Removed {removed_count} old files.")
     print("="*40 + "\n")
 
 def process_forecast_hour(date_obj, date_str, run, fhr):
-    # 1. Download Files
     mean_file = download_file(date_str, run, fhr, 'mean')
     pmmn_file = download_file(date_str, run, fhr, 'pmmn')
     
@@ -147,16 +145,13 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 
         # --- LOAD PMMN DATA ---
         ds_uh_max = None
-        
         if pmmn_file:
             try:
                 ds_pmmn_raw = xr.open_dataset(pmmn_file, engine='cfgrib', 
                                               backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
-                
                 var_name = list(ds_pmmn_raw.data_vars)[0]
                 ds_uh_max = ds_pmmn_raw[var_name]
                 print(f"       Found PMMN UH (Var: {var_name}). Max: {ds_uh_max.values.max():.1f}")
-                
             except Exception as e:
                 print(f"       PMMN UH Load Failed: {e}")
 
@@ -172,17 +167,17 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 
         print(f"       Generating Map...")
         
-        # 1. FIGURE SETUP (White Background enforced)
-        fig = plt.figure(figsize=(16, 12), facecolor='white') # Force Figure White
+        # 1. FORCE WHITE FIGURE BACKGROUND
+        fig = plt.figure(figsize=(16, 12), facecolor='white') 
         fig.subplots_adjust(bottom=0.18, top=0.93)
 
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
         ax.set_extent(REGION)
         
-        # 2. AXIS BACKGROUND (White Background enforced)
+        # 2. FORCE WHITE AXES BACKGROUND
         ax.set_facecolor('white')
         
-        # 3. FEATURES (Force White Land/Ocean to cover holes)
+        # 3. FORCE WHITE FEATURES (To cover any gray)
         ax.add_feature(cfeature.LAND, facecolor='white', zorder=0)
         ax.add_feature(cfeature.OCEAN, facecolor='white', zorder=0)
         
@@ -190,13 +185,13 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ax.add_feature(cfeature.BORDERS, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
-        # 1. Plot CAPE
-        cape_plotted = False
+        # Plot CAPE
         if ds_cape is not None:
             cape_data = ds_cape['cape']
+            # FIX: Convert NaNs to 0.0 immediately
             cape_vals = np.nan_to_num(cape_data.values, nan=0.0)
             
-            # CHECK INTEGRITY: If max CAPE is effectively 0, don't plot contourf (avoids gray box)
+            # Only plot if there is actual CAPE > 10
             if np.max(cape_vals) > 10:
                 try:
                     cape_plot = ax.contourf(cape_data.longitude, cape_data.latitude, cape_vals, 
@@ -205,16 +200,12 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                     
                     ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
                     plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal', label='SBCAPE (J/kg)')
-                    cape_plotted = True
                 except Exception as e:
                     print(f"       [!] Plotting CAPE failed: {e}")
             else:
-                print("       [!] CAPE data empty (Max < 10). Skipping contours.")
-        
-        if not cape_plotted:
-            print("       [!] Map will be blank (White) background.")
+                print("       [!] CAPE data empty/NaN (Max < 10). Map will be white.")
 
-        # 2. Plot MAX UH
+        # Plot MAX UH
         if ds_uh_max is not None:
             uh_vals = ds_uh_max.values
             if np.nanmax(uh_vals) > 20:
@@ -228,7 +219,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                     plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='2-5km Max UH (>25 m$^2$/s$^2$)')
                 except: pass
 
-        # 4. Legend
+        # Legend
         legend_elements = [
             mlines.Line2D([], [], color='magenta', lw=3, label='0-1.5 km'),
             mlines.Line2D([], [], color='red', lw=3, label='1.5-3 km'),
@@ -239,8 +230,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers", 
                   framealpha=0.9, fontsize=11, title_fontsize=12).set_zorder(100)
 
-        # 5. Hodographs
-        print(f"       Plotted Hodographs...")
+        # Hodographs
         lons = u.longitude.values
         lats = u.latitude.values
         u_data = u.values
@@ -266,14 +256,12 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         # Save
         valid_time = date_obj + timedelta(hours=fhr)
         valid_str = valid_time.strftime("%a %H:%MZ") 
-        
         plt.suptitle(f"HREF Mean CAPE + PMMN UH Tracks | Run: {date_str} {run}Z | Valid: {valid_str} (f{fhr:02d})", 
                      fontsize=20, weight='bold', y=0.98)
         
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         out_path = f"{OUTPUT_DIR}/href_hodo_cape_{date_str}_{run}z_f{fhr:02d}.png"
         plt.savefig(out_path, bbox_inches='tight', dpi=90) 
-        print(f"       Saved: {out_path}")
         plt.close(fig)
 
     except Exception as e:
@@ -288,9 +276,7 @@ if __name__ == "__main__":
     run_dt = datetime.datetime.strptime(f"{date_str} {run}", "%Y%m%d %H")
     print(f"Starting HREF (Mean CAPE + PMMN UH) generation for {date_str} {run}Z")
     
-    # 1. GENERATE NEW RUN
     for fhr in range(1, 49):
         process_forecast_hour(run_dt, date_str, run, fhr)
     
-    # 2. REMOVE OLD RUNS
     cleanup_old_runs(date_str, run)
