@@ -20,7 +20,8 @@ import cfgrib
 warnings.filterwarnings("ignore")
 
 # --- Configuration ---
-REGION = [-83.5, -75.5, 32.5, 37.5]
+#REGION = [-83.5, -75.5, 32.5, 37.5]
+REGION = [-83.5, -65.5, 32.5, 37.5]
 OUTPUT_DIR = "images"
 GRID_SPACING = 25
 BOX_SIZE = 100000
