@@ -1,158 +1,3 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HREF Hodograph Viewer</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
-    <style>
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: #f4f4f9; 
-            margin: 0; 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            padding: 20px;
-        }
-        
-        h2 { margin: 5px 0; color: #333; }
-        
-        .controls { 
-            margin-bottom: 10px; 
-            font-size: 14px; 
-            color: #555; 
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-
-        button#download-btn {
-            background-color: #28a745;
-            color: white;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: bold;
-            transition: background 0.2s;
-        }
-
-        button#download-btn:hover { background-color: #218838; }
-        button#download-btn:disabled { background-color: #ccc; cursor: not-allowed; }
-
-        /* TIMELINE BAR */
-        .timeline-container {
-            display: grid;
-            grid-template-columns: repeat(24, 1fr);
-            width: 100%;
-            max-width: 1200px;
-            gap: 2px;
-            margin-bottom: 15px;
-            background: #fff;
-            padding: 5px;
-            border-radius: 5px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        .time-box {
-            background: #e9ecef;
-            border: 1px solid #ced4da;
-            text-align: center;
-            font-size: 11px;
-            padding: 6px 0;
-            cursor: pointer;
-            user-select: none;
-            transition: all 0.1s ease;
-        }
-
-        .time-box:hover {
-            background: #4dabf7;
-            color: white;
-            border-color: #339af0;
-            transform: translateY(-2px);
-        }
-
-        .time-box.active {
-            background: #007bff;
-            color: white;
-            font-weight: bold;
-            border-color: #0056b3;
-        }
-
-        /* MAP CONTAINER */
-        #map-container {
-            width: 100%;
-            max-width: 1200px;
-            background: #fff;
-            border: 1px solid #ccc;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 5px;
-            min-height: 400px;
-            position: relative; 
-        }
-        
-        #forecast-img {
-            width: 100%;
-            height: auto;
-            display: block;
-            z-index: 2; 
-            min-height: 400px; 
-        }
-
-        /* LOADING SPINNER */
-        #loader {
-            position: absolute;
-            z-index: 1; 
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            color: #666;
-            font-style: italic;
-        }
-
-        .spinner {
-            border: 4px solid #f3f3f3; 
-            border-top: 4px solid #3498db; 
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin-bottom: 10px;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-    </style>
-</head>
-<body>
-
-    <h2 id="page-title">HREF Hodograph Analysis (Live)</h2>
-    
-    <div class="controls">
-        <span id="run-info">Loading...</span> | 
-        <span><strong>Hover</strong>/<strong>Click</strong> to view, <strong>Arrows</strong> to navigate.</span>
-        <button id="download-btn" onclick="generateGIF()">Download Animated GIF</button>
-    </div>
-
-    <div class="timeline-container" id="timeline"></div>
-
-    <div id="map-container">
-        <div id="loader">
-            <div class="spinner"></div>
-            <span>Loading Map...</span>
-        </div>
-        
-        <img id="forecast-img" src="" alt="Map Display" onerror="this.style.display='none'">
-    </div>
-
 <script>
     // CONFIGURATION
     const totalHours = 48;
@@ -239,55 +84,57 @@
         }
     });
 
-    // --- GIF GENERATION LOGIC ---
+    // --- GIF GENERATION LOGIC (FIXED WORKER LOADING) ---
     async function generateGIF() {
         btn.disabled = true;
-        btn.textContent = "Generating GIF (0%)...";
+        btn.textContent = "Loading Worker...";
         
         try {
-            // Initialize GIF object
-            // workers: 2 -> uses 2 CPU threads
-            // quality: 10 -> Lower is better quality but slower (10 is good balance)
+            // 1. Fetch the worker script manually to bypass CORS issues
+            const workerResponse = await fetch('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js');
+            const workerBlob = await workerResponse.blob();
+            const workerUrl = URL.createObjectURL(workerBlob);
+
+            // 2. Initialize GIF with the Blob URL
             const gif = new GIF({
                 workers: 2,
                 quality: 10,
-                width: imgElement.naturalWidth || 1200, // Use image dimensions
+                workerScript: workerUrl, // <--- This forces it to work!
+                width: imgElement.naturalWidth || 1200,
                 height: imgElement.naturalHeight || 800
             });
 
-            // Loop through all 48 frames
+            // 3. Loop through frames
             for (let i = 1; i <= totalHours; i++) {
                 const fhrStr = String(i).padStart(2, '0');
                 const filename = `href_hodo_cape_${dateStr}_${runHour}z_f${fhrStr}.png`;
                 const url = imageDir + filename;
                 
-                // Load image manually
+                // Update Button Text
+                const percent = Math.round((i / totalHours) * 100);
+                btn.textContent = `Adding Frames (${percent}%)...`;
+
+                // Load image
                 const img = new Image();
-                img.crossOrigin = "Anonymous"; // Important for CORS if needed
+                img.crossOrigin = "Anonymous"; 
                 
-                // Wrap loading in a promise to wait for it
                 await new Promise((resolve, reject) => {
                     img.onload = () => {
-                        gif.addFrame(img, {delay: 250}); // 250ms delay = 4 frames per second
+                        gif.addFrame(img, {delay: 250});
                         resolve();
                     };
                     img.onerror = () => {
                         console.warn(`Skipping missing frame: ${filename}`);
-                        resolve(); // Skip missing frames but keep going
+                        resolve(); 
                     };
                     img.src = url;
                 });
-
-                // Update Button Text
-                const percent = Math.round((i / totalHours) * 100);
-                btn.textContent = `Generating GIF (${percent}%)...`;
             }
 
-            btn.textContent = "Rendering...";
+            btn.textContent = "Rendering (Please Wait)...";
 
-            // Finish GIF
+            // 4. Finish GIF
             gif.on('finished', function(blob) {
-                // Create a download link automatically
                 const link = document.createElement('a');
                 link.href = URL.createObjectURL(blob);
                 link.download = `href_loop_${dateStr}_${runHour}z.gif`;
@@ -295,21 +142,19 @@
                 link.click();
                 document.body.removeChild(link);
                 
-                // Reset Button
+                // Cleanup
                 btn.textContent = "Download Animated GIF";
                 btn.disabled = false;
+                URL.revokeObjectURL(workerUrl); // Free up memory
             });
 
             gif.render();
 
         } catch (e) {
             console.error(e);
-            alert("Error generating GIF. Check console.");
+            alert("Error: " + e.message);
             btn.textContent = "Download Animated GIF";
             btn.disabled = false;
         }
     }
-
 </script>
-</body>
-</html>
