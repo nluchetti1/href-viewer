@@ -2,6 +2,7 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 import matplotlib.colors as mcolors
+import matplotlib.patches as mpatches
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from metpy.plots import Hodograph
@@ -28,6 +29,7 @@ BOX_SIZE = 100000
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
 # --- CAPE COLORS (Background) ---
+# 0-250 is White, 250-500 is Light Gray, etc.
 CAPE_LEVELS = np.arange(0, 5001, 250) 
 CAPE_COLORS = [
     '#ffffff', '#f5f5f5', '#b0b0b0', '#808080', 
@@ -167,45 +169,49 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 
         print(f"       Generating Map...")
         
-        # 1. FORCE WHITE FIGURE BACKGROUND
+        # 1. SETUP FIGURE
         fig = plt.figure(figsize=(16, 12), facecolor='white') 
         fig.subplots_adjust(bottom=0.18, top=0.93)
 
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
         ax.set_extent(REGION)
         
-        # 2. FORCE WHITE AXES BACKGROUND
-        ax.set_facecolor('white')
-        
-        # 3. FORCE WHITE FEATURES (To cover any gray)
-        ax.add_feature(cfeature.LAND, facecolor='white', zorder=0)
-        ax.add_feature(cfeature.OCEAN, facecolor='white', zorder=0)
-        
+        # 2. NUCLEAR OPTION: Add a solid white rectangle behind everything
+        # This guarantees that if data is transparent (NaN/0), we see white, not gray.
+        # This fixes the "Gray Domain" issue.
+        background_patch = mpatches.Rectangle(
+            (REGION[0], REGION[2]), 
+            REGION[1]-REGION[0], REGION[3]-REGION[2], 
+            transform=ccrs.PlateCarree(), 
+            facecolor='white', 
+            zorder=0
+        )
+        ax.add_patch(background_patch)
+
         ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.BORDERS, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
-        # Plot CAPE
+        # 3. Plot CAPE (Always Plot)
         if ds_cape is not None:
             cape_data = ds_cape['cape']
-            # FIX: Convert NaNs to 0.0 immediately
+            # FIX: Force all NaNs and Negatives to 0.0
             cape_vals = np.nan_to_num(cape_data.values, nan=0.0)
+            cape_vals[cape_vals < 0] = 0
             
-            # Only plot if there is actual CAPE > 10
-            if np.max(cape_vals) > 10:
-                try:
-                    cape_plot = ax.contourf(cape_data.longitude, cape_data.latitude, cape_vals, 
-                                            levels=CAPE_LEVELS, cmap=CAPE_CMAP, 
-                                            extend='max', alpha=0.6, transform=ccrs.PlateCarree())
-                    
-                    ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
-                    plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal', label='SBCAPE (J/kg)')
-                except Exception as e:
-                    print(f"       [!] Plotting CAPE failed: {e}")
-            else:
-                print("       [!] CAPE data empty/NaN (Max < 10). Map will be white.")
+            try:
+                # We plot even if Max < 10. The 0s will plot as White, 
+                # ensuring the map is filled.
+                cape_plot = ax.contourf(cape_data.longitude, cape_data.latitude, cape_vals, 
+                                        levels=CAPE_LEVELS, cmap=CAPE_CMAP, 
+                                        extend='max', alpha=0.6, transform=ccrs.PlateCarree())
+                
+                ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
+                plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal', label='SBCAPE (J/kg)')
+            except Exception as e:
+                print(f"       [!] Plotting CAPE failed: {e}")
 
-        # Plot MAX UH
+        # 4. Plot MAX UH
         if ds_uh_max is not None:
             uh_vals = ds_uh_max.values
             if np.nanmax(uh_vals) > 20:
