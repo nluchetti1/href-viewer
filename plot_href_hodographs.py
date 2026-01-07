@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore")
 REGION = [-83.5, -75.5, 32.5, 37.5]   
 #REGION = [-103.5, -95.5, 32.5, 37.5] 
 OUTPUT_DIR = "images"
-GRID_SPACING = 25             
+GRID_SPACING = 25              
 BOX_SIZE = 100000              
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
@@ -131,7 +131,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         return
 
     try:
-        print(f"       Loading Data...")
+        print(f"        Loading Data...")
         
         # --- LOAD MEAN DATA ---
         ds_u = xr.open_dataset(mean_file, engine='cfgrib', 
@@ -154,9 +154,9 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                                               backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
                 var_name = list(ds_pmmn_raw.data_vars)[0]
                 ds_uh_max = ds_pmmn_raw[var_name]
-                print(f"       Found PMMN UH (Var: {var_name}). Max: {ds_uh_max.values.max():.1f}")
+                print(f"        Found PMMN UH (Var: {var_name}). Max: {ds_uh_max.values.max():.1f}")
             except Exception as e:
-                print(f"       PMMN UH Load Failed: {e}")
+                print(f"        PMMN UH Load Failed: {e}")
 
         # --- PLOTTING ---
         file_levels = ds_wind.isobaricInhPa.values
@@ -168,7 +168,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         v = ds_wind['v'].metpy.convert_units('kts')
         level_values = available_levels
 
-        print(f"       Generating Map...")
+        print(f"        Generating Map...")
         
         # 1. SETUP FIGURE
         fig = plt.figure(figsize=(16, 12), facecolor='white') 
@@ -179,7 +179,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         
         # 2. NUCLEAR OPTION: Add a solid white rectangle behind everything
         # This guarantees that if data is transparent (NaN/0), we see white, not gray.
-        # This fixes the "Gray Domain" issue.
         background_patch = mpatches.Rectangle(
             (REGION[0], REGION[2]), 
             REGION[1]-REGION[0], REGION[3]-REGION[2], 
@@ -196,7 +195,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         # 3. Plot CAPE (Always Plot)
         if ds_cape is not None:
             cape_data = ds_cape['cape']
-            # FIX: Force all NaNs and Negatives to 0.0
+            # Force all NaNs and Negatives to 0.0
             cape_vals = np.nan_to_num(cape_data.values, nan=0.0)
             cape_vals[cape_vals < 0] = 0
             
@@ -210,21 +209,26 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
                 plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal', label='SBCAPE (J/kg)')
             except Exception as e:
-                print(f"       [!] Plotting CAPE failed: {e}")
+                print(f"        [!] Plotting CAPE failed: {e}")
 
-        # 4. Plot MAX UH
+        # 4. Plot MAX UH (THE FIX IS HERE)
         if ds_uh_max is not None:
-            uh_vals = ds_uh_max.values
-            if np.nanmax(uh_vals) > 20:
-                print("       Plotting Max UH Swaths (Green)...")
+            # FIX: Mask values below the minimum threshold (25) so they are transparent
+            # This prevents the "gray blanket" over the whole map when UH is 0.
+            uh_masked = ds_uh_max.where(ds_uh_max >= 25)
+            
+            # Check if there is valid data AFTER masking
+            if np.nanmax(uh_masked.values) >= 25:
+                print("        Plotting Max UH Swaths (Green)...")
                 try:
-                    max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_vals,
-                                          levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
-                                          extend='max', transform=ccrs.PlateCarree(), zorder=15)
+                    max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_masked,
+                                           levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
+                                           extend='max', transform=ccrs.PlateCarree(), zorder=15)
                     
                     ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
                     plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='2-5km Max UH (>25 m$^2$/s$^2$)')
-                except: pass
+                except Exception as e:
+                    print(f"        UH Plot Error: {e}")
 
         # Legend
         legend_elements = [
