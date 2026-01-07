@@ -15,13 +15,13 @@ import sys
 import warnings
 import traceback
 import cfgrib
+import glob 
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
 # --- Configuration ---
-#REGION = [-83.5, -75.5, 32.5, 37.5]   
-REGION = [-103.5, -95.5, 32.5, 37.5]
+REGION = [-83.5, -75.5, 32.5, 37.5]   
 OUTPUT_DIR = "images"
 GRID_SPACING = 25             
 BOX_SIZE = 100000              
@@ -101,6 +101,37 @@ def plot_colored_hodograph(ax, u, v, levels):
         color = get_segment_color(p_start, p_end)
         ax.plot([u[k], u[k+1]], [v[k], v[k+1]], color=color, linewidth=3.0)
 
+def cleanup_old_runs(current_date, current_run):
+    """
+    Removes images from previous runs.
+    Keeps only files matching the CURRENT date and run.
+    """
+    print("\n" + "="*40)
+    print("CLEANUP: Removing old run data...")
+    
+    # Current filename pattern prefix
+    # e.g. "images/href_hodo_cape_20260107_00z"
+    current_prefix = f"href_hodo_cape_{current_date}_{current_run}z"
+    
+    # List all PNGs in the images folder
+    all_files = glob.glob(os.path.join(OUTPUT_DIR, "href_hodo_cape_*.png"))
+    
+    removed_count = 0
+    for filepath in all_files:
+        filename = os.path.basename(filepath)
+        
+        # If the file does NOT start with the current run string, delete it.
+        if not filename.startswith(current_prefix):
+            try:
+                os.remove(filepath)
+                # print(f"  Deleted: {filename}") # Uncomment for verbose logging
+                removed_count += 1
+            except Exception as e:
+                print(f"  Error deleting {filename}: {e}")
+                
+    print(f"Cleanup Complete. Removed {removed_count} old files.")
+    print("="*40 + "\n")
+
 def process_forecast_hour(date_obj, date_str, run, fhr):
     # 1. Download Files
     mean_file = download_file(date_str, run, fhr, 'mean')
@@ -120,32 +151,26 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                                backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'v'}})
         ds_wind = xr.merge([ds_u, ds_v])
         
-        # --- LOAD CAPE (Debug Mode) ---
         ds_cape = None
         try:
             ds_cape = xr.open_dataset(mean_file, engine='cfgrib', 
                                       backend_kwargs={'filter_by_keys': {'shortName': 'cape', 'typeOfLevel': 'surface'}})
-        except Exception as e:
-            # CAPE is missing or failed to load. We print why, but continue plotting winds/UH.
-            print(f"       [!] CAPE Missing: {e}")
-            ds_cape = None
+        except: pass
 
         # --- LOAD PMMN DATA ---
         ds_uh_max = None
         
         if pmmn_file:
             try:
-                # Robust Finder: Filter by Level Type (5000m) & Grab First Variable
                 ds_pmmn_raw = xr.open_dataset(pmmn_file, engine='cfgrib', 
                                               backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
                 
-                # Grab first variable blindly (avoids 'unknown' name issues)
                 var_name = list(ds_pmmn_raw.data_vars)[0]
                 ds_uh_max = ds_pmmn_raw[var_name]
                 print(f"       Found PMMN UH (Var: {var_name}). Max: {ds_uh_max.values.max():.1f}")
                 
             except Exception as e:
-                print(f"       [!] PMMN UH Load Failed: {e}")
+                print(f"       PMMN UH Load Failed: {e}")
 
         # --- PLOTTING ---
         file_levels = ds_wind.isobaricInhPa.values
@@ -159,14 +184,12 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 
         print(f"       Generating Map...")
         
-        # INCREASED MARGINS to fix title/colorbar overlap
         fig = plt.figure(figsize=(16, 12)) 
         fig.subplots_adjust(bottom=0.18, top=0.93)
 
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
         ax.set_extent(REGION)
         
-        # FORCE WHITE BACKGROUND (Fixes "Gray Map" issue when CAPE is missing)
         ax.set_facecolor('white')
         
         ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
@@ -181,13 +204,12 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                                     levels=CAPE_LEVELS, cmap=CAPE_CMAP, 
                                     extend='max', alpha=0.6, transform=ccrs.PlateCarree())
             
-            # CAPE Colorbar (Raised Position)
             ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
             plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal', label='SBCAPE (J/kg)')
         else:
             print("       [!] Skipping CAPE Plot (Data Missing)")
 
-        # 2. Plot MAX UH (Green Scale)
+        # 2. Plot MAX UH
         if ds_uh_max is not None:
             uh_vals = ds_uh_max.values
             if np.nanmax(uh_vals) > 20:
@@ -196,7 +218,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                                       levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
                                       extend='max', transform=ccrs.PlateCarree(), zorder=15)
                 
-                # UH Colorbar (Lower Position)
                 ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
                 plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='2-5km Max UH (>25 m$^2$/s$^2$)')
 
@@ -252,7 +273,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         print(f"Error processing f{fhr:02d}: {e}")
         traceback.print_exc()
     finally:
-        # Cleanup BOTH files
         if mean_file and os.path.exists(mean_file): os.remove(mean_file)
         if pmmn_file and os.path.exists(pmmn_file): os.remove(pmmn_file)
 
@@ -261,5 +281,9 @@ if __name__ == "__main__":
     run_dt = datetime.datetime.strptime(f"{date_str} {run}", "%Y%m%d %H")
     print(f"Starting HREF (Mean CAPE + PMMN UH) generation for {date_str} {run}Z")
     
+    # 1. GENERATE NEW RUN
     for fhr in range(1, 49):
         process_forecast_hour(run_dt, date_str, run, fhr)
+    
+    # 2. REMOVE OLD RUNS (Only happens if loop finishes)
+    cleanup_old_runs(date_str, run)
