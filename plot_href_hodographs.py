@@ -27,33 +27,26 @@ GRID_SPACING = 25
 BOX_SIZE = 100000              
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
-# --- SPC HREF STYLE CAPE CONFIGURATION ---
-# Levels matching the SPC color bar: 100, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 9000
-# Added 0 to start to isolate the 0-100 white bin.
+# --- SPC HREF STYLE CAPE CONFIGURATION (0-100 White) ---
+# Matching levels from the SPC Prediction Center color bar
 CAPE_LEVELS = [0, 100, 250, 500, 750, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 9000]
 
 CAPE_COLORS = [
-    '#ffffff', # 0-100: White (SPC Style mask)
-    '#e1e1e1', # 100-250: Very Light Gray
-    '#c0c0c0', # 250-500: Light Gray
-    '#808080', # 500-750: Medium Gray
-    '#626262', # 750-1000: Dark Gray
-    '#9dc2ff', # 1000-1250: Light Blue
-    '#4169e1', # 1250-1500: Royal Blue
-    '#0000cd', # 1500-2000: Medium Blue
-    '#00ff00', # 2000-2500: Bright Green
-    '#008000', # 2500-3000: Green
-    '#ffff00', # 3000-4000: Yellow
-    '#ff8c00', # 4000-5000: Orange/Brown
-    '#ff0000', # 5000-7000: Red
-    '#ff00ff', # 7000-9000: Magenta
-    '#800080'  # 9000+: Purple
+    '#ffffff', # 0-100: White
+    '#e1e1e1', '#c0c0c0', '#808080', '#626262', # Grays
+    '#9dc2ff', '#4169e1', '#0000cd', # Blues
+    '#00ff00', '#008000', # Greens
+    '#ffff00', # Yellow
+    '#ff8c00', # Orange
+    '#ff0000', # Red
+    '#ff00ff', # Magenta
+    '#800080'  # Purple
 ]
 
 CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
 CAPE_NORM = mcolors.BoundaryNorm(CAPE_LEVELS, CAPE_CMAP.N)
 
-# --- UH COLORS (Green Scale) ---
+# --- UH COLORS ---
 UH_LEVELS = [25, 50, 75, 100, 150, 200, 250]
 uh_colors = ['#c7f9cc', '#7cfc00', '#32cd32', '#008000', '#006400', '#000000']
 UH_CMAP = mcolors.ListedColormap(uh_colors)
@@ -115,28 +108,26 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             ds_pmmn_raw = xr.open_dataset(pmmn_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
             ds_uh_max = ds_pmmn_raw[list(ds_pmmn_raw.data_vars)[0]]
 
-        fig = plt.figure(figsize=(16, 14), facecolor='white')
+        fig = plt.figure(figsize=(16, 12), facecolor='white')
+        fig.subplots_adjust(bottom=0.18, top=0.93) # Restored original adjustment
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
         ax.set_extent(REGION)
         
-        ax.add_feature(cfeature.COASTLINE, linewidth=1.5, zorder=10)
-        ax.add_feature(cfeature.STATES, linewidth=1.0, edgecolor='black', zorder=10)
-        ax.add_feature(cfeature.BORDERS, linewidth=1.5, zorder=10)
+        ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
+        ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
-        # --- PLOT CAPE (SPC STYLE) ---
+        # --- PLOT CAPE ---
         if ds_cape is not None:
             cape_vals = np.nan_to_num(ds_cape['cape'].values, nan=0.0)
-            # Mask out everything below 100 for the fill
             cape_vals[cape_vals < 100] = 0
             
             cape_plot = ax.contourf(ds_cape.longitude, ds_cape.latitude, cape_vals, 
                                     levels=CAPE_LEVELS, cmap=CAPE_CMAP, norm=CAPE_NORM,
-                                    extend='max', alpha=0.7, transform=ccrs.PlateCarree())
+                                    extend='max', alpha=0.6, transform=ccrs.PlateCarree())
             
-            ax_cbar_cape = fig.add_axes([0.15, 0.08, 0.7, 0.02]) 
+            ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
             cb_cape = plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal')
             
-            # Exact SPC Tick Labels
             spc_ticks = [100, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 9000]
             cb_cape.set_ticks(spc_ticks)
             cb_cape.ax.set_xticklabels([str(t) for t in spc_ticks], fontsize=10)
@@ -150,32 +141,41 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                                        levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
                                        extend='max', transform=ccrs.PlateCarree(), zorder=15)
                 ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
-                plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='Max UH (>25 $m^2/s^2$)')
+                plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='2-5km Max UH (>25 m$^2$/s$^2$)')
 
-        # Hodographs (Grid logic)
+        # Hodographs and Legends (Original Logic)
+        legend_elements = [
+            mlines.Line2D([], [], color='magenta', lw=3, label='0-1.5 km'),
+            mlines.Line2D([], [], color='red', lw=3, label='1.5-3 km'),
+            mlines.Line2D([], [], color='green', lw=3, label='3-6 km'),
+            mlines.Line2D([], [], color='gold', lw=3, label='6-9 km'),
+            mlines.Line2D([], [], color='black', lw=0.5, alpha=0.5, label='Rings: 20 kts') 
+        ]
+        ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers", framealpha=0.9).set_zorder(100)
+
         u_kts = ds_wind['u'].metpy.convert_units('kts').values
         v_kts = ds_wind['v'].metpy.convert_units('kts').values
         lons, lats = ds_wind.longitude.values, ds_wind.latitude.values
-        
         for i in range(0, lons.shape[0], GRID_SPACING):
             for j in range(0, lons.shape[1], GRID_SPACING):
                 if np.isnan(u_kts[:, i, j]).any(): continue
                 lon_val = lons[i, j] - 360 if lons[i, j] > 180 else lons[i, j]
                 if not (REGION[0] < lon_val < REGION[1] and REGION[2] < lats[i, j] < REGION[3]): continue
-                
                 proj_pnt = ax.projection.transform_point(lons[i, j], lats[i, j], ccrs.PlateCarree())
                 sub_ax = ax.inset_axes([proj_pnt[0]-BOX_SIZE/2, proj_pnt[1]-BOX_SIZE/2, BOX_SIZE, BOX_SIZE], transform=ax.transData, zorder=20)
                 h = Hodograph(sub_ax, component_range=80)
-                h.add_grid(increment=20, color='black', alpha=0.2, linewidth=0.5)
+                h.add_grid(increment=20, color='black', alpha=0.3, linewidth=0.5)
                 plot_colored_hodograph(h.ax, u_kts[:, i, j], v_kts[:, i, j], REQUESTED_LEVELS)
                 sub_ax.axis('off')
 
+        # --- RESTORED ORIGINAL TITLE FORMAT ---
         valid_time = date_obj + timedelta(hours=fhr)
-        plt.suptitle(f"HREF Mean CAPE + UH Tracks | Run: {date_str} {run}Z | Valid: {valid_time.strftime('%a %Y-%m-%d %H:%MZ')}", 
-                     fontsize=18, weight='bold', y=0.95)
+        valid_str = valid_time.strftime("%a %H:%MZ") 
+        plt.suptitle(f"HREF Mean CAPE + PMMN UH Tracks | Run: {date_str} {run}Z | Valid: {valid_str} (f{fhr:02d})", 
+                     fontsize=20, weight='bold', y=0.98)
         
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        plt.savefig(f"{OUTPUT_DIR}/href_hodo_cape_{date_str}_{run}z_f{fhr:02d}.png", bbox_inches='tight', dpi=120) 
+        plt.savefig(f"{OUTPUT_DIR}/href_hodo_cape_{date_str}_{run}z_f{fhr:02d}.png", bbox_inches='tight', dpi=100) 
         plt.close(fig)
 
     except: traceback.print_exc()
@@ -186,6 +186,5 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 if __name__ == "__main__":
     date_str, run, date_obj = get_latest_run_time()
     run_dt = datetime.datetime.strptime(f"{date_str} {run}", "%Y%m%d %H")
-    for fhr in range(1, 37): # Adjusted for speed
-        process_forecast_hour(run_dt, date_str, run, fhr)
+    for fhr in range(1, 49): process_forecast_hour(run_dt, date_str, run, fhr)
     cleanup_old_runs(date_str, run)
