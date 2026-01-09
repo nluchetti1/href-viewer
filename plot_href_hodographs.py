@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
+import matplotlib.ticker as mticker
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from metpy.plots import Hodograph
@@ -23,63 +24,34 @@ warnings.filterwarnings("ignore")
 
 # --- Configuration ---
 REGION = [-83.5, -75.5, 32.5, 37.5]   
-#REGION = [-103.5, -95.5, 32.5, 37.5] 
 OUTPUT_DIR = "images"
 GRID_SPACING = 25              
 BOX_SIZE = 100000              
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
-# --- CAPE COLORS (Background) ---
-# 0-250 is White, 250-500 is Light Gray, etc.
-#CAPE_LEVELS = np.arange(0, 5001, 250) 
-#CAPE_COLORS = [
-#    '#ffffff', '#f5f5f5', '#b0b0b0', '#808080', 
- #   '#6495ed', '#4169e1', '#00bfff', '#40e0d0', 
- #   '#adff2f', '#ffff00', '#ffda00', '#ffa500', 
-#   '#ff8c00', '#ff4500', '#ff0000', '#b22222', 
-#    '#8b0000', '#800080', '#9400d3', '#ff1493'
-#]
-
-# --- CAPE LEVELS (Customized for 0-50 White Bin) ---
-# We explicitly define the first few breaks to isolate 0-50, 
-# then resume standard 250 J/kg increments.
+# --- CAPE COLORS & LEVELS ---
+# Define levels such that 0-50 is the first bin
 CAPE_LEVELS = [0, 50, 250, 500, 750, 1000, 1250, 1500, 1750, 2000, 
                2250, 2500, 2750, 3000, 3250, 3500, 3750, 4000, 4250, 4500, 5000]
 
-# --- CAPE COLORS (Matching your GIF) ---
 CAPE_COLORS = [
-    '#ffffff', # 0-50: Pure White
-    '#d3d3d3', # 50-250: Light Gray
-    '#a9a9a9', # 250-500: Medium Gray
-    '#808080', # 500-750: Dark Gray
-    '#9dc2ff', # 750-1000: Light Blue
-    '#70a1ff', # 1000-1250: Sky Blue
-    '#00bfff', # 1250-1500: Deep Sky Blue
-    '#7fffd4', # 1500-1750: Aquamarine
-    '#98fb98', # 1750-2000: Pale Green
-    '#adff2f', # 2000-2250: Green Yellow
-    '#ffff00', # 2250-2500: Yellow
-    '#ffdb58', # 2500-2750: Mustard/Gold
-    '#f4a460', # 2750-3000: Sandy Brown
-    '#ff7f50', # 3000-3250: Coral
-    '#ff4500', # 3250-3500: Orange Red
-    '#cd5c5c', # 3500-3750: Indian Red
-    '#a52a2a', # 3750-4000: Brown
-    '#ba55d3', # 4000-4250: Medium Orchid
-    '#9400d3', # 4250-4500: Dark Violet
-    '#ff69b4'  # 4500+: Hot Pink
+    '#ffffff', # 0-50: White
+    '#d3d3d3', '#a9a9a9', '#808080', # Grays
+    '#9dc2ff', '#70a1ff', '#00bfff', # Blues
+    '#7fffd4', '#98fb98', '#adff2f', # Cyans/Greens
+    '#ffff00', '#ffdb58', '#f4a460', # Yellows/Golds
+    '#ff7f50', '#ff4500', '#cd5c5c', # Oranges/Reds
+    '#a52a2a', '#ba55d3', '#9400d3', '#ff1493'  # Browns/Purples/Pinks
 ]
-CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
 
-# --- UH COLORS (Green Scale - Positive Only) ---
+CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
+CAPE_NORM = mcolors.BoundaryNorm(CAPE_LEVELS, CAPE_CMAP.N)
+
+# --- UH COLORS ---
 UH_LEVELS = [25, 50, 75, 100, 150, 200, 250]
 uh_colors = [
-    (0.6, 1, 0.6, 0.5),   # 25-50:  Pale Green
-    (0.3, 0.9, 0.3, 0.6), # 50-75:  Light Green
-    (0, 0.7, 0, 0.7),     # 75-100: Medium Green
-    (0, 0.5, 0, 0.8),     # 100-150: Dark Green
-    (0, 0.3, 0, 0.9),     # 150-200: Forest Green
-    (0, 0, 0, 1.0)        # 200+:   Black
+    (0.6, 1, 0.6, 0.5), (0.3, 0.9, 0.3, 0.6), (0, 0.7, 0, 0.7),
+    (0, 0.5, 0, 0.8), (0, 0.3, 0, 0.9), (0, 0, 0, 1.0)
 ]
 UH_CMAP = mcolors.ListedColormap(uh_colors)
 UH_NORM = mcolors.BoundaryNorm(UH_LEVELS, UH_CMAP.N)
@@ -101,26 +73,18 @@ def download_file(date_str, run, fhr, prod_type):
     base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{date_str}/ensprod"
     filename = f"href.t{run}z.conus.{prod_type}.f{fhr:02d}.grib2"
     url = f"{base_url}/{filename}"
-    
-    if prod_type == 'mean':
-        print(f"\n[f{fhr:02d}] Downloading Mean & PMMN data...")
-    
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         with requests.get(url, stream=True, timeout=60, headers=headers) as r:
-            if r.status_code == 404:
-                return None
+            if r.status_code == 404: return None
             r.raise_for_status()
             with open(filename, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
+                for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
         return filename
-    except Exception:
-        return None
+    except: return None
 
-def get_segment_color(pressure_start, pressure_end):
-    avg_p = (pressure_start + pressure_end) / 2.0
+def get_segment_color(p_start, p_end):
+    avg_p = (p_start + p_end) / 2.0
     if avg_p >= 850: return 'magenta'
     elif 700 <= avg_p < 850: return 'red'
     elif 500 <= avg_p < 700: return 'green'
@@ -128,139 +92,90 @@ def get_segment_color(pressure_start, pressure_end):
 
 def plot_colored_hodograph(ax, u, v, levels):
     for k in range(len(u) - 1):
-        p_start = levels[k]
-        p_end = levels[k+1]
-        color = get_segment_color(p_start, p_end)
+        color = get_segment_color(levels[k], levels[k+1])
         ax.plot([u[k], u[k+1]], [v[k], v[k+1]], color=color, linewidth=3.0)
 
 def cleanup_old_runs(current_date, current_run):
-    print("\n" + "="*40)
-    print("CLEANUP: Removing old run data...")
-    current_prefix = f"href_hodo_cape_{current_date}_{current_run}z"
-    all_files = glob.glob(os.path.join(OUTPUT_DIR, "href_hodo_cape_*.png"))
-    
-    removed_count = 0
-    for filepath in all_files:
-        filename = os.path.basename(filepath)
-        if not filename.startswith(current_prefix):
-            try:
-                os.remove(filepath)
-                removed_count += 1
-            except Exception:
-                pass
-                
-    print(f"Cleanup Complete. Removed {removed_count} old files.")
-    print("="*40 + "\n")
+    prefix = f"href_hodo_cape_{current_date}_{current_run}z"
+    for f in glob.glob(os.path.join(OUTPUT_DIR, "href_hodo_cape_*.png")):
+        if not os.path.basename(f).startswith(prefix):
+            try: os.remove(f)
+            except: pass
 
 def process_forecast_hour(date_obj, date_str, run, fhr):
     mean_file = download_file(date_str, run, fhr, 'mean')
     pmmn_file = download_file(date_str, run, fhr, 'pmmn')
-    
-    if not mean_file:
-        print(f"Skipping f{fhr:02d} (Mean file missing)")
-        return
+    if not mean_file: return
 
     try:
-        print(f"        Loading Data...")
-        
-        # --- LOAD MEAN DATA ---
-        ds_u = xr.open_dataset(mean_file, engine='cfgrib', 
-                               backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'u'}})
-        ds_v = xr.open_dataset(mean_file, engine='cfgrib', 
-                               backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'v'}})
+        # Load Datasets
+        ds_u = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'u'}})
+        ds_v = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'v'}})
         ds_wind = xr.merge([ds_u, ds_v])
+        ds_cape = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': 'cape', 'typeOfLevel': 'surface'}})
         
-        ds_cape = None
-        try:
-            ds_cape = xr.open_dataset(mean_file, engine='cfgrib', 
-                                      backend_kwargs={'filter_by_keys': {'shortName': 'cape', 'typeOfLevel': 'surface'}})
-        except: pass
-
-        # --- LOAD PMMN DATA ---
         ds_uh_max = None
         if pmmn_file:
-            try:
-                ds_pmmn_raw = xr.open_dataset(pmmn_file, engine='cfgrib', 
-                                              backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
-                var_name = list(ds_pmmn_raw.data_vars)[0]
-                ds_uh_max = ds_pmmn_raw[var_name]
-                print(f"        Found PMMN UH (Var: {var_name}). Max: {ds_uh_max.values.max():.1f}")
-            except Exception as e:
-                print(f"        PMMN UH Load Failed: {e}")
+            ds_pmmn_raw = xr.open_dataset(pmmn_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
+            ds_uh_max = ds_pmmn_raw[list(ds_pmmn_raw.data_vars)[0]]
 
-        # --- PLOTTING ---
-        file_levels = ds_wind.isobaricInhPa.values
-        available_levels = sorted([l for l in REQUESTED_LEVELS if l in file_levels], reverse=True)
-        if len(available_levels) < 3: return
-        
-        ds_wind = ds_wind.sel(isobaricInhPa=available_levels)
-        u = ds_wind['u'].metpy.convert_units('kts')
-        v = ds_wind['v'].metpy.convert_units('kts')
-        level_values = available_levels
-
-        print(f"        Generating Map...")
-        
-        # 1. SETUP FIGURE
-        fig = plt.figure(figsize=(16, 12), facecolor='white') 
+        # Setup Figure
+        fig = plt.figure(figsize=(16, 12), facecolor='white')
         fig.subplots_adjust(bottom=0.18, top=0.93)
-
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
         ax.set_extent(REGION)
         
-        # 2. NUCLEAR OPTION: Add a solid white rectangle behind everything
-        # This guarantees that if data is transparent (NaN/0), we see white, not gray.
-        background_patch = mpatches.Rectangle(
-            (REGION[0], REGION[2]), 
-            REGION[1]-REGION[0], REGION[3]-REGION[2], 
-            transform=ccrs.PlateCarree(), 
-            facecolor='white', 
-            zorder=0
-        )
-        ax.add_patch(background_patch)
-
         ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
-        ax.add_feature(cfeature.BORDERS, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
-        # 3. Plot CAPE (Always Plot)
+        # --- PLOT CAPE ---
         if ds_cape is not None:
-            cape_data = ds_cape['cape']
-            # Force all NaNs and Negatives to 0.0
-            cape_vals = np.nan_to_num(cape_data.values, nan=0.0)
+            cape_vals = np.nan_to_num(ds_cape['cape'].values, nan=0.0)
             cape_vals[cape_vals < 0] = 0
             
-            try:
-                # We plot even if Max < 10. The 0s will plot as White, 
-                # ensuring the map is filled.
-                cape_plot = ax.contourf(cape_data.longitude, cape_data.latitude, cape_vals, 
-                                        levels=CAPE_LEVELS, cmap=CAPE_CMAP, 
-                                        extend='max', alpha=0.6, transform=ccrs.PlateCarree())
-                
-                ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
-                plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal', label='SBCAPE (J/kg)')
-            except Exception as e:
-                print(f"        [!] Plotting CAPE failed: {e}")
-
-        # 4. Plot MAX UH (THE FIX IS HERE)
-        if ds_uh_max is not None:
-            # FIX: Mask values below the minimum threshold (25) so they are transparent
-            # This prevents the "gray blanket" over the whole map when UH is 0.
-            uh_masked = ds_uh_max.where(ds_uh_max >= 25)
+            cape_plot = ax.contourf(ds_cape.longitude, ds_cape.latitude, cape_vals, 
+                                    levels=CAPE_LEVELS, cmap=CAPE_CMAP, norm=CAPE_NORM,
+                                    extend='max', alpha=0.6, transform=ccrs.PlateCarree())
             
-            # Check if there is valid data AFTER masking
-            if np.nanmax(uh_masked.values) >= 25:
-                print("        Plotting Max UH Swaths (Green)...")
-                try:
-                    max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_masked,
-                                           levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
-                                           extend='max', transform=ccrs.PlateCarree(), zorder=15)
-                    
-                    ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
-                    plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='2-5km Max UH (>25 m$^2$/s$^2$)')
-                except Exception as e:
-                    print(f"        UH Plot Error: {e}")
+            # Colorbar Positioning
+            ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
+            cb_cape = plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal')
+            
+            # Fixed Ticks to ensure labels don't bunch up or align to centers
+            tick_locs = [0, 750, 1500, 2250, 3000, 3750, 4500]
+            cb_cape.set_ticks(tick_locs)
+            cb_cape.ax.set_xticklabels([str(t) for t in tick_locs], fontsize=10)
+            cb_cape.set_label('SBCAPE (J/kg)', fontsize=12, weight='bold')
 
-        # Legend
+        # --- PLOT UH ---
+        if ds_uh_max is not None:
+            uh_masked = ds_uh_max.where(ds_uh_max >= 25)
+            if np.nanmax(uh_masked.values) >= 25:
+                max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_masked,
+                                       levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
+                                       extend='max', transform=ccrs.PlateCarree(), zorder=15)
+                ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
+                plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='2-5km Max UH (>25 m$^2$/s$^2$)')
+
+        # Hodographs
+        u_kts = ds_wind['u'].metpy.convert_units('kts').values
+        v_kts = ds_wind['v'].metpy.convert_units('kts').values
+        lons, lats = ds_wind.longitude.values, ds_wind.latitude.values
+        
+        for i in range(0, lons.shape[0], GRID_SPACING):
+            for j in range(0, lons.shape[1], GRID_SPACING):
+                if np.isnan(u_kts[:, i, j]).any(): continue
+                lon_val = lons[i, j] - 360 if lons[i, j] > 180 else lons[i, j]
+                if not (REGION[0] < lon_val < REGION[1] and REGION[2] < lats[i, j] < REGION[3]): continue
+                
+                proj_pnt = ax.projection.transform_point(lons[i, j], lats[i, j], ccrs.PlateCarree())
+                sub_ax = ax.inset_axes([proj_pnt[0]-BOX_SIZE/2, proj_pnt[1]-BOX_SIZE/2, BOX_SIZE, BOX_SIZE], transform=ax.transData, zorder=20)
+                h = Hodograph(sub_ax, component_range=80)
+                h.add_grid(increment=20, color='black', alpha=0.3, linewidth=0.5)
+                plot_colored_hodograph(h.ax, u_kts[:, i, j], v_kts[:, i, j], REQUESTED_LEVELS)
+                sub_ax.axis('off')
+
+        # Legend & Titles
         legend_elements = [
             mlines.Line2D([], [], color='magenta', lw=3, label='0-1.5 km'),
             mlines.Line2D([], [], color='red', lw=3, label='1.5-3 km'),
@@ -268,56 +183,23 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             mlines.Line2D([], [], color='gold', lw=3, label='6-9 km'),
             mlines.Line2D([], [], color='black', lw=0.5, alpha=0.5, label='Rings: 20 kts') 
         ]
-        ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers", 
-                  framealpha=0.9, fontsize=11, title_fontsize=12).set_zorder(100)
+        ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers", framealpha=0.9).set_zorder(100)
 
-        # Hodographs
-        lons = u.longitude.values
-        lats = u.latitude.values
-        u_data = u.values
-        v_data = v.values
-
-        for i in range(0, lons.shape[0], GRID_SPACING):
-            for j in range(0, lons.shape[1], GRID_SPACING):
-                if np.isnan(u_data[:, i, j]).any(): continue
-                curr_lon = lons[i, j]
-                curr_lat = lats[i, j]
-                check_lon = curr_lon - 360 if curr_lon > 180 else curr_lon
-                if not (REGION[0] < check_lon < REGION[1] and REGION[2] < curr_lat < REGION[3]): continue
-                try:
-                    proj_pnt = ax.projection.transform_point(curr_lon, curr_lat, ccrs.PlateCarree())
-                    bounds = [proj_pnt[0] - BOX_SIZE/2, proj_pnt[1] - BOX_SIZE/2, BOX_SIZE, BOX_SIZE]
-                    sub_ax = ax.inset_axes(bounds, transform=ax.transData, zorder=20)
-                    h = Hodograph(sub_ax, component_range=80)
-                    h.add_grid(increment=20, color='black', alpha=0.3, linewidth=0.5)
-                    plot_colored_hodograph(h.ax, u_data[:, i, j], v_data[:, i, j], level_values)
-                    sub_ax.axis('off')
-                except: continue
-
-        # Save
         valid_time = date_obj + timedelta(hours=fhr)
-        valid_str = valid_time.strftime("%a %H:%MZ") 
-        plt.suptitle(f"HREF Mean CAPE + PMMN UH Tracks | Run: {date_str} {run}Z | Valid: {valid_str} (f{fhr:02d})", 
+        plt.suptitle(f"HREF Mean CAPE + PMMN UH Tracks | Run: {date_str} {run}Z | Valid: {valid_time.strftime('%a %H:%MZ')} (f{fhr:02d})", 
                      fontsize=20, weight='bold', y=0.98)
         
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        out_path = f"{OUTPUT_DIR}/href_hodo_cape_{date_str}_{run}z_f{fhr:02d}.png"
-        plt.savefig(out_path, bbox_inches='tight', dpi=90) 
+        plt.savefig(f"{OUTPUT_DIR}/href_hodo_cape_{date_str}_{run}z_f{fhr:02d}.png", bbox_inches='tight', dpi=100) 
         plt.close(fig)
 
-    except Exception as e:
-        print(f"Error processing f{fhr:02d}: {e}")
-        traceback.print_exc()
+    except: traceback.print_exc()
     finally:
-        if mean_file and os.path.exists(mean_file): os.remove(mean_file)
-        if pmmn_file and os.path.exists(pmmn_file): os.remove(pmmn_file)
+        for f in [mean_file, pmmn_file]: 
+            if f and os.path.exists(f): os.remove(f)
 
 if __name__ == "__main__":
     date_str, run, date_obj = get_latest_run_time()
     run_dt = datetime.datetime.strptime(f"{date_str} {run}", "%Y%m%d %H")
-    print(f"Starting HREF (Mean CAPE + PMMN UH) generation for {date_str} {run}Z")
-    
-    for fhr in range(1, 49):
-        process_forecast_hour(run_dt, date_str, run, fhr)
-    
+    for fhr in range(1, 49): process_forecast_hour(run_dt, date_str, run, fhr)
     cleanup_old_runs(date_str, run)
