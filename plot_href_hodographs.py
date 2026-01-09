@@ -31,13 +31,43 @@ REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
 # --- CAPE COLORS (Background) ---
 # 0-250 is White, 250-500 is Light Gray, etc.
-CAPE_LEVELS = np.arange(0, 5001, 250) 
+#CAPE_LEVELS = np.arange(0, 5001, 250) 
+#CAPE_COLORS = [
+#    '#ffffff', '#f5f5f5', '#b0b0b0', '#808080', 
+ #   '#6495ed', '#4169e1', '#00bfff', '#40e0d0', 
+ #   '#adff2f', '#ffff00', '#ffda00', '#ffa500', 
+#   '#ff8c00', '#ff4500', '#ff0000', '#b22222', 
+#    '#8b0000', '#800080', '#9400d3', '#ff1493'
+#]
+
+# --- CAPE LEVELS (Customized for 0-50 White Bin) ---
+# We explicitly define the first few breaks to isolate 0-50, 
+# then resume standard 250 J/kg increments.
+CAPE_LEVELS = [0, 50, 250, 500, 750, 1000, 1250, 1500, 1750, 2000, 
+               2250, 2500, 2750, 3000, 3250, 3500, 3750, 4000, 4250, 4500, 5000]
+
+# --- CAPE COLORS (Matching your GIF) ---
 CAPE_COLORS = [
-    '#ffffff', '#f5f5f5', '#b0b0b0', '#808080', 
-    '#6495ed', '#4169e1', '#00bfff', '#40e0d0', 
-    '#adff2f', '#ffff00', '#ffda00', '#ffa500', 
-    '#ff8c00', '#ff4500', '#ff0000', '#b22222', 
-    '#8b0000', '#800080', '#9400d3', '#ff1493'
+    '#ffffff', # 0-50: Pure White
+    '#d3d3d3', # 50-250: Light Gray
+    '#a9a9a9', # 250-500: Medium Gray
+    '#808080', # 500-750: Dark Gray
+    '#9dc2ff', # 750-1000: Light Blue
+    '#70a1ff', # 1000-1250: Sky Blue
+    '#00bfff', # 1250-1500: Deep Sky Blue
+    '#7fffd4', # 1500-1750: Aquamarine
+    '#98fb98', # 1750-2000: Pale Green
+    '#adff2f', # 2000-2250: Green Yellow
+    '#ffff00', # 2250-2500: Yellow
+    '#ffdb58', # 2500-2750: Mustard/Gold
+    '#f4a460', # 2750-3000: Sandy Brown
+    '#ff7f50', # 3000-3250: Coral
+    '#ff4500', # 3250-3500: Orange Red
+    '#cd5c5c', # 3500-3750: Indian Red
+    '#a52a2a', # 3750-4000: Brown
+    '#ba55d3', # 4000-4250: Medium Orchid
+    '#9400d3', # 4250-4500: Dark Violet
+    '#ff69b4'  # 4500+: Hot Pink
 ]
 CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
 
