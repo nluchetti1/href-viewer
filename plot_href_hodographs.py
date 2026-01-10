@@ -26,14 +26,7 @@ REGION = [-83.5, -75.5, 32.5, 37.5]
 OUTPUT_DIR = "images"
 GRID_SPACING = 25             
 BOX_SIZE = 100000             
-# Added 950 and 300 to support the 0.5km and 9km requests
 REQUESTED_LEVELS = [1000, 950, 925, 850, 700, 500, 400, 300, 250]
-
-# --- Precise Pressure Thresholds for your request ---
-P05 = mpcalc.height_to_pressure_std(0.5 * units.km).m
-P3  = mpcalc.height_to_pressure_std(3 * units.km).m
-P6  = mpcalc.height_to_pressure_std(6 * units.km).m
-P9  = mpcalc.height_to_pressure_std(9 * units.km).m
 
 # --- SPC HREF STYLE CAPE CONFIGURATION ---
 CAPE_LEVELS = [0, 100, 250, 500, 750, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 9000]
@@ -72,18 +65,35 @@ def download_file(date_str, run, fhr, prod_type):
         return filename
     except: return None
 
-def get_segment_color(p_start, p_end):
-    avg_p = (p_start + p_end) / 2.0
-    if avg_p >= P05: return 'hotpink' # 0-0.5 km
-    elif P3 <= avg_p < P05: return 'red' # 0.5-3 km
-    elif P6 <= avg_p < P3: return 'green' # 3-6 km
-    elif P9 <= avg_p < P6: return 'gold' # 6-9 km
-    else: return 'cyan'
-
+# INTERPOLATION FIX HERE
 def plot_colored_hodograph(ax, u, v, levels):
-    for k in range(len(u) - 1):
-        color = get_segment_color(levels[k], levels[k+1])
-        ax.plot([u[k], u[k+1]], [v[k], v[k+1]], color=color, linewidth=2.5)
+    # 1. Convert pressure levels to height (km)
+    h_levels = mpcalc.pressure_to_height_std(levels * units.hPa).to(units.km).m
+    
+    # 2. Create a high-resolution height grid for smooth interpolation (0 to 9km)
+    h_grid = np.linspace(0, 9, 100) 
+    
+    # 3. Interpolate U and V to the new grid
+    # We flip because pressure levels are usually top-down in the array
+    u_interp = np.interp(h_grid, np.flip(h_levels), np.flip(u))
+    v_interp = np.interp(h_grid, np.flip(h_levels), np.flip(v))
+
+    # 4. Plot each tiny segment with the correct color based on height
+    for k in range(len(h_grid) - 1):
+        z = h_grid[k]
+        if z < 0.5:
+            color = 'hotpink'
+        elif 0.5 <= z < 3.0:
+            color = 'red'
+        elif 3.0 <= z < 6.0:
+            color = 'green'
+        elif 6.0 <= z <= 9.0:
+            color = 'gold'
+        else:
+            continue
+            
+        ax.plot([u_interp[k], u_interp[k+1]], [v_interp[k], v_interp[k+1]], 
+                color=color, linewidth=2.5)
 
 def cleanup_old_runs(current_date, current_run):
     prefix = f"href_hodo_cape_{current_date}_{current_run}z"
@@ -140,7 +150,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
                 plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='2-5km Max UH (>25 m$^2$/s$^2$)')
 
-        # Updated Legends
+        # Legends
         legend_elements = [
             mlines.Line2D([], [], color='hotpink', lw=3, label='0-0.5 km'),
             mlines.Line2D([], [], color='red', lw=3, label='0.5-3 km'),
@@ -150,7 +160,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ]
         ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers", framealpha=0.9).set_zorder(100)
 
-        # Hodograph Plotting Loop
         file_levels = ds_wind.isobaricInhPa.values
         current_levels = sorted([l for l in REQUESTED_LEVELS if l in file_levels], reverse=True)
         ds_wind_sub = ds_wind.sel(isobaricInhPa=current_levels)
