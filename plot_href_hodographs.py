@@ -30,11 +30,7 @@ REQUESTED_LEVELS = [1000, 950, 925, 850, 700, 500, 400, 300, 250]
 
 # --- SPC HREF STYLE CAPE CONFIGURATION ---
 CAPE_LEVELS = [0, 100, 250, 500, 750, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 9000]
-CAPE_COLORS = [
-    '#ffffff', '#e1e1e1', '#c0c0c0', '#808080', '#626262', 
-    '#9dc2ff', '#4169e1', '#0000cd', '#00ff00', '#008000', 
-    '#ffff00', '#ff8c00', '#ff0000', '#ff00ff', '#800080'
-]
+CAPE_COLORS = ['#ffffff', '#e1e1e1', '#c0c0c0', '#808080', '#626262', '#9dc2ff', '#4169e1', '#0000cd', '#00ff00', '#008000', '#ffff00', '#ff8c00', '#ff0000', '#ff00ff', '#800080']
 CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
 CAPE_NORM = mcolors.BoundaryNorm(CAPE_LEVELS, CAPE_CMAP.N)
 
@@ -65,34 +61,33 @@ def download_file(date_str, run, fhr, prod_type):
         return filename
     except: return None
 
-# INTERPOLATION FIX HERE
+# --- FIXED HODOGRAPH PLOTTING ---
 def plot_colored_hodograph(ax, u, v, levels):
-    # 1. Convert pressure levels to height (km)
-    h_levels = mpcalc.pressure_to_height_std(levels * units.hPa).to(units.km).m
+    # 1. MetPy log-interpolation to get exact height points
+    # This creates a 500m-resolution profile from 0 to 9km
+    h_target = np.arange(0, 9001, 250) * units.m
+    p_levels = levels * units.hPa
+    h_levels = mpcalc.pressure_to_height_std(p_levels)
     
-    # 2. Create a high-resolution height grid for smooth interpolation (0 to 9km)
-    h_grid = np.linspace(0, 9, 100) 
-    
-    # 3. Interpolate U and V to the new grid
-    # We flip because pressure levels are usually top-down in the array
-    u_interp = np.interp(h_grid, np.flip(h_levels), np.flip(u))
-    v_interp = np.interp(h_grid, np.flip(h_levels), np.flip(v))
+    # Sort everything by height increasing for interpolation
+    sort_idx = np.argsort(h_levels)
+    h_sorted = h_levels[sort_idx]
+    u_sorted = u[sort_idx] * units.kts
+    v_sorted = v[sort_idx] * units.kts
 
-    # 4. Plot each tiny segment with the correct color based on height
-    for k in range(len(h_grid) - 1):
-        z = h_grid[k]
-        if z < 0.5:
-            color = 'hotpink'
-        elif 0.5 <= z < 3.0:
-            color = 'red'
-        elif 3.0 <= z < 6.0:
-            color = 'green'
-        elif 6.0 <= z <= 9.0:
-            color = 'gold'
-        else:
-            continue
+    u_interp = mpcalc.log_interp(h_target, h_sorted, u_sorted)
+    v_interp = mpcalc.log_interp(h_target, h_sorted, v_sorted)
+
+    # 2. Plot segments
+    for k in range(len(h_target) - 1):
+        z = h_target[k].to(units.km).m
+        if z < 0.5: color = 'hotpink'
+        elif 0.5 <= z < 3.0: color = 'red'
+        elif 3.0 <= z < 6.0: color = 'green'
+        elif 6.0 <= z <= 9.0: color = 'gold'
+        else: continue
             
-        ax.plot([u_interp[k], u_interp[k+1]], [v_interp[k], v_interp[k+1]], 
+        ax.plot([u_interp[k].m, u_interp[k+1].m], [v_interp[k].m, v_interp[k+1].m], 
                 color=color, linewidth=2.5)
 
 def cleanup_old_runs(current_date, current_run):
@@ -126,31 +121,21 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
-        # --- PLOT CAPE ---
         if ds_cape is not None:
             cape_vals = np.nan_to_num(ds_cape['cape'].values, nan=0.0)
             cape_vals[cape_vals < 100] = 0
-            cape_plot = ax.contourf(ds_cape.longitude, ds_cape.latitude, cape_vals, 
-                                    levels=CAPE_LEVELS, cmap=CAPE_CMAP, norm=CAPE_NORM,
-                                    extend='max', alpha=0.6, transform=ccrs.PlateCarree())
+            cape_plot = ax.contourf(ds_cape.longitude, ds_cape.latitude, cape_vals, levels=CAPE_LEVELS, cmap=CAPE_CMAP, norm=CAPE_NORM, extend='max', alpha=0.6, transform=ccrs.PlateCarree())
             ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
             cb_cape = plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal')
-            spc_ticks = [100, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 9000]
-            cb_cape.set_ticks(spc_ticks)
-            cb_cape.ax.set_xticklabels([str(t) for t in spc_ticks], fontsize=10)
             cb_cape.set_label('Surface-based CAPE (J/kg)', fontsize=12, weight='bold')
 
-        # --- PLOT UH (PMMN Tracks) ---
         if ds_uh_max is not None:
             uh_masked = ds_uh_max.where(ds_uh_max >= 25)
             if np.nanmax(uh_masked.values) >= 25:
-                max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_masked,
-                                       levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
-                                       extend='max', transform=ccrs.PlateCarree(), zorder=15)
+                max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_masked, levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM, extend='max', transform=ccrs.PlateCarree(), zorder=15)
                 ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
                 plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='2-5km Max UH (>25 m$^2$/s$^2$)')
 
-        # Legends
         legend_elements = [
             mlines.Line2D([], [], color='hotpink', lw=3, label='0-0.5 km'),
             mlines.Line2D([], [], color='red', lw=3, label='0.5-3 km'),
@@ -180,11 +165,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 sub_ax.axis('off')
 
         valid_time = date_obj + timedelta(hours=fhr)
-        valid_str = valid_time.strftime("%a %H:%MZ") 
-        plt.suptitle(f"HREF Mean CAPE + PMMN UH Tracks | Run: {date_str} {run}Z | Valid: {valid_str} (f{fhr:02d})", 
-                      fontsize=20, weight='bold', y=0.98)
-        
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        plt.suptitle(f"HREF Mean CAPE + PMMN UH Tracks | Valid: {valid_time.strftime('%a %H:%MZ')} (f{fhr:02d})", fontsize=20, weight='bold', y=0.98)
         plt.savefig(f"{OUTPUT_DIR}/href_hodo_cape_{date_str}_{run}z_f{fhr:02d}.png", bbox_inches='tight', dpi=100) 
         plt.close(fig)
 
