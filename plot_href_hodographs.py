@@ -132,16 +132,35 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             cb_cape.set_ticks(spc_ticks)
             cb_cape.ax.set_xticklabels([str(t) for t in spc_ticks], fontsize=10)
             cb_cape.set_label('Surface-based CAPE (J/kg)', fontsize=12, weight='bold')
-
+            
         # --- PLOT UH ---
         if ds_uh_max is not None:
             uh_masked = ds_uh_max.where(ds_uh_max >= 25)
-            if np.nanmax(uh_masked.values) >= 25:
-                max_plot = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_masked,
-                                       levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
-                                       extend='max', transform=ccrs.PlateCarree(), zorder=15)
-                ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
-                plt.colorbar(max_plot, cax=ax_cbar_max, orientation='horizontal', label='2-5km Max UH (>25 m$^2$/s$^2$)')
+            
+            # 1. Determine if we have data to plot
+            # (We use a safe check that handles all-NaN slices without warning)
+            if np.all(np.isnan(uh_masked.values)):
+                has_data = False
+            else:
+                has_data = np.nanmax(uh_masked.values) >= 25
+
+            # 2. Plot contours if data exists, otherwise prepare a dummy for the colorbar
+            if has_data:
+                # Plot actual data
+                cf_uh = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_masked,
+                                     levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
+                                     extend='max', transform=ccrs.PlateCarree(), zorder=15)
+                mappable = cf_uh
+            else:
+                # Create a dummy mappable so the colorbar can still be drawn
+                mappable = plt.cm.ScalarMappable(norm=UH_NORM, cmap=UH_CMAP)
+                mappable.set_array([]) 
+            
+            # 3. Always draw the colorbar
+            ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
+            # We manually add extend='max' here to ensure the arrow matches the contourf style
+            plt.colorbar(mappable, cax=ax_cbar_max, orientation='horizontal', 
+                        label='2-5km Max UH (>25 m$^2$/s$^2$)', extend='max')
 
         # Hodographs and Legends (Original Logic)
         legend_elements = [
