@@ -2,33 +2,29 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 import matplotlib.colors as mcolors
-import matplotlib.patches as mpatches
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from metpy.plots import Hodograph
-from metpy.units import units
 import numpy as np
 import datetime
 from datetime import timedelta
 import requests
 import os
 import traceback
-import cfgrib
-import glob 
+import glob
+import warnings
 
 # Suppress warnings
-import warnings
 warnings.filterwarnings("ignore")
 
 # --- Configuration ---
-REGION = [-83.5, -75.5, 32.5, 37.5]   
+REGION = [-83.5, -75.5, 32.5, 37.5]    
 OUTPUT_DIR = "images"
 GRID_SPACING = 25              
 BOX_SIZE = 100000              
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
 # --- SPC HREF STYLE CAPE CONFIGURATION (0-100 White) ---
-# Matching levels from the SPC Prediction Center color bar
 CAPE_LEVELS = [0, 100, 250, 500, 750, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 9000]
 
 CAPE_COLORS = [
@@ -65,13 +61,22 @@ def download_file(date_str, run, fhr, prod_type):
     url = f"{base_url}/{filename}"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
+        # Check if file already exists to save bandwidth
+        if os.path.exists(filename):
+            return filename
+            
+        print(f"Downloading {filename}...")
         with requests.get(url, stream=True, timeout=60, headers=headers) as r:
-            if r.status_code == 404: return None
+            if r.status_code == 404: 
+                print(f"Missing: {url}")
+                return None
             r.raise_for_status()
             with open(filename, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
         return filename
-    except: return None
+    except Exception as e:
+        print(f"Download failed: {e}")
+        return None
 
 def get_segment_color(p_start, p_end):
     avg_p = (p_start + p_end) / 2.0
@@ -93,11 +98,16 @@ def cleanup_old_runs(current_date, current_run):
             except: pass
 
 def process_forecast_hour(date_obj, date_str, run, fhr):
+    print(f"\nProcessing F{fhr:02d}...")
     mean_file = download_file(date_str, run, fhr, 'mean')
     pmmn_file = download_file(date_str, run, fhr, 'pmmn')
-    if not mean_file: return
+    
+    if not mean_file: 
+        print("Mean file unavailable.")
+        return
 
     try:
+        # Load datasets
         ds_u = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'u'}})
         ds_v = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'v'}})
         ds_wind = xr.merge([ds_u, ds_v])
@@ -108,8 +118,15 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             ds_pmmn_raw = xr.open_dataset(pmmn_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
             ds_uh_max = ds_pmmn_raw[list(ds_pmmn_raw.data_vars)[0]]
 
+        # --- DEBUGGING OUTPUT ---
+        # This confirms if the data is actually bad or if it's just the plot
+        cape_min = np.nanmin(ds_cape['cape'].values)
+        cape_max = np.nanmax(ds_cape['cape'].values)
+        print(f"   [DEBUG] CAPE Range: {cape_min:.1f} to {cape_max:.1f} J/kg")
+        # ------------------------
+
         fig = plt.figure(figsize=(16, 12), facecolor='white')
-        fig.subplots_adjust(bottom=0.18, top=0.93) # Restored original adjustment
+        fig.subplots_adjust(bottom=0.18, top=0.93)
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
         ax.set_extent(REGION)
         
@@ -118,10 +135,18 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 
         # --- PLOT CAPE ---
         if ds_cape is not None:
-            cape_vals = np.nan_to_num(ds_cape['cape'].values, nan=0.0)
+            # Squeeze removes single dimensions (e.g. time) to ensure 2D array
+            cape_vals = np.nan_to_num(ds_cape['cape'].values.squeeze(), nan=0.0)
             cape_vals[cape_vals < 100] = 0
             
-            cape_plot = ax.contourf(ds_cape.longitude, ds_cape.latitude, cape_vals, 
+            # --- FIX: NORMALIZE LONGITUDE ---
+            # Converts 0-360 grid to -180 to 180 grid to prevent wrapping artifacts
+            lats = ds_cape.latitude.values
+            lons = ds_cape.longitude.values
+            lons = (lons + 180) % 360 - 180 
+            # --------------------------------
+
+            cape_plot = ax.contourf(lons, lats, cape_vals, 
                                     levels=CAPE_LEVELS, cmap=CAPE_CMAP, norm=CAPE_NORM,
                                     extend='max', alpha=0.6, transform=ccrs.PlateCarree())
             
@@ -135,34 +160,31 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             
         # --- PLOT UH ---
         if ds_uh_max is not None:
-            uh_masked = ds_uh_max.where(ds_uh_max >= 25)
+            uh_vals = ds_uh_max.values.squeeze()
+            uh_masked = np.where(uh_vals >= 25, uh_vals, np.nan)
             
-            # 1. Determine if we have data to plot
-            # (We use a safe check that handles all-NaN slices without warning)
-            if np.all(np.isnan(uh_masked.values)):
-                has_data = False
-            else:
-                has_data = np.nanmax(uh_masked.values) >= 25
+            # Apply same longitude fix to UH
+            uh_lats = ds_uh_max.latitude.values
+            uh_lons = ds_uh_max.longitude.values
+            uh_lons = (uh_lons + 180) % 360 - 180
 
-            # 2. Plot contours if data exists, otherwise prepare a dummy for the colorbar
+            # Determine if we have data to plot
+            has_data = np.nanmax(uh_masked) >= 25 if not np.all(np.isnan(uh_masked)) else False
+
             if has_data:
-                # Plot actual data
-                cf_uh = ax.contourf(ds_uh_max.longitude, ds_uh_max.latitude, uh_masked,
+                cf_uh = ax.contourf(uh_lons, uh_lats, uh_masked,
                                      levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
                                      extend='max', transform=ccrs.PlateCarree(), zorder=15)
                 mappable = cf_uh
             else:
-                # Create a dummy mappable so the colorbar can still be drawn
                 mappable = plt.cm.ScalarMappable(norm=UH_NORM, cmap=UH_CMAP)
                 mappable.set_array([]) 
             
-            # 3. Always draw the colorbar
             ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
-            # We manually add extend='max' here to ensure the arrow matches the contourf style
             plt.colorbar(mappable, cax=ax_cbar_max, orientation='horizontal', 
-                        label='2-5km Max UH (>25 m$^2$/s$^2$)', extend='max')
+                         label='2-5km Max UH (>25 m$^2$/s$^2$)', extend='max')
 
-        # Hodographs and Legends (Original Logic)
+        # --- HODOGRAPHS ---
         legend_elements = [
             mlines.Line2D([], [], color='magenta', lw=3, label='0-1.5 km'),
             mlines.Line2D([], [], color='red', lw=3, label='1.5-3 km'),
@@ -172,38 +194,58 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ]
         ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers", framealpha=0.9).set_zorder(100)
 
-        u_kts = ds_wind['u'].metpy.convert_units('kts').values
-        v_kts = ds_wind['v'].metpy.convert_units('kts').values
-        lons, lats = ds_wind.longitude.values, ds_wind.latitude.values
-        for i in range(0, lons.shape[0], GRID_SPACING):
-            for j in range(0, lons.shape[1], GRID_SPACING):
-                if np.isnan(u_kts[:, i, j]).any(): continue
-                lon_val = lons[i, j] - 360 if lons[i, j] > 180 else lons[i, j]
-                if not (REGION[0] < lon_val < REGION[1] and REGION[2] < lats[i, j] < REGION[3]): continue
-                proj_pnt = ax.projection.transform_point(lons[i, j], lats[i, j], ccrs.PlateCarree())
+        u_kts = ds_wind['u'].metpy.convert_units('kts').values.squeeze()
+        v_kts = ds_wind['v'].metpy.convert_units('kts').values.squeeze()
+        lons_wind = ds_wind.longitude.values
+        lats_wind = ds_wind.latitude.values
+        
+        for i in range(0, lons_wind.shape[0], GRID_SPACING):
+            for j in range(0, lons_wind.shape[1], GRID_SPACING):
+                if np.isnan(u_kts[i, j]): continue
+                
+                # Check bounds (using raw lons to match your original logic, 
+                # but adjusting wrap for logic consistency)
+                lon_val = lons_wind[i, j]
+                lon_val = lon_val - 360 if lon_val > 180 else lon_val
+                
+                if not (REGION[0] < lon_val < REGION[1] and REGION[2] < lats_wind[i, j] < REGION[3]): continue
+                
+                proj_pnt = ax.projection.transform_point(lons_wind[i, j], lats_wind[i, j], ccrs.PlateCarree())
                 sub_ax = ax.inset_axes([proj_pnt[0]-BOX_SIZE/2, proj_pnt[1]-BOX_SIZE/2, BOX_SIZE, BOX_SIZE], transform=ax.transData, zorder=20)
                 h = Hodograph(sub_ax, component_range=80)
                 h.add_grid(increment=20, color='black', alpha=0.3, linewidth=0.5)
-                plot_colored_hodograph(h.ax, u_kts[:, i, j], v_kts[:, i, j], REQUESTED_LEVELS)
+                plot_colored_hodograph(h.ax, u_kts[i, j], v_kts[i, j], REQUESTED_LEVELS)
                 sub_ax.axis('off')
 
-        # --- RESTORED ORIGINAL TITLE FORMAT ---
         valid_time = date_obj + timedelta(hours=fhr)
         valid_str = valid_time.strftime("%a %H:%MZ") 
         plt.suptitle(f"HREF Mean CAPE + PMMN UH Tracks | Run: {date_str} {run}Z | Valid: {valid_str} (f{fhr:02d})", 
                      fontsize=20, weight='bold', y=0.98)
         
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        plt.savefig(f"{OUTPUT_DIR}/href_hodo_cape_{date_str}_{run}z_f{fhr:02d}.png", bbox_inches='tight', dpi=100) 
+        filename_png = f"{OUTPUT_DIR}/href_hodo_cape_{date_str}_{run}z_f{fhr:02d}.png"
+        plt.savefig(filename_png, bbox_inches='tight', dpi=100) 
+        print(f"   Saved: {filename_png}")
         plt.close(fig)
 
-    except: traceback.print_exc()
+    except Exception: 
+        print(f"Error processing F{fhr}:")
+        traceback.print_exc()
     finally:
+        # Clean up GRIB files to save space
         for f in [mean_file, pmmn_file]: 
-            if f and os.path.exists(f): os.remove(f)
+            if f and os.path.exists(f): 
+                try: os.remove(f)
+                except: pass
 
 if __name__ == "__main__":
     date_str, run, date_obj = get_latest_run_time()
+    print(f"Starting Run: {date_str} {run}Z")
     run_dt = datetime.datetime.strptime(f"{date_str} {run}", "%Y%m%d %H")
-    for fhr in range(1, 49): process_forecast_hour(run_dt, date_str, run, fhr)
+    
+    # Loop through forecast hours
+    for fhr in range(1, 49): 
+        process_forecast_hour(run_dt, date_str, run, fhr)
+    
     cleanup_old_runs(date_str, run)
+    print("Done.")
