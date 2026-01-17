@@ -61,7 +61,6 @@ def download_file(date_str, run, fhr, prod_type):
     url = f"{base_url}/{filename}"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
-        # Check if file already exists to save bandwidth
         if os.path.exists(filename):
             return filename
             
@@ -119,7 +118,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             ds_uh_max = ds_pmmn_raw[list(ds_pmmn_raw.data_vars)[0]]
 
         # --- DEBUGGING OUTPUT ---
-        # This confirms if the data is actually bad or if it's just the plot
         cape_min = np.nanmin(ds_cape['cape'].values)
         cape_max = np.nanmax(ds_cape['cape'].values)
         print(f"   [DEBUG] CAPE Range: {cape_min:.1f} to {cape_max:.1f} J/kg")
@@ -140,7 +138,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             cape_vals[cape_vals < 100] = 0
             
             # --- FIX: NORMALIZE LONGITUDE ---
-            # Converts 0-360 grid to -180 to 180 grid to prevent wrapping artifacts
             lats = ds_cape.latitude.values
             lons = ds_cape.longitude.values
             lons = (lons + 180) % 360 - 180 
@@ -163,13 +160,14 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             uh_vals = ds_uh_max.values.squeeze()
             uh_masked = np.where(uh_vals >= 25, uh_vals, np.nan)
             
-            # Apply same longitude fix to UH
             uh_lats = ds_uh_max.latitude.values
             uh_lons = ds_uh_max.longitude.values
             uh_lons = (uh_lons + 180) % 360 - 180
 
-            # Determine if we have data to plot
-            has_data = np.nanmax(uh_masked) >= 25 if not np.all(np.isnan(uh_masked)) else False
+            if np.all(np.isnan(uh_masked)):
+                has_data = False
+            else:
+                has_data = np.nanmax(uh_masked) >= 25
 
             if has_data:
                 cf_uh = ax.contourf(uh_lons, uh_lats, uh_masked,
@@ -194,17 +192,21 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ]
         ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers", framealpha=0.9).set_zorder(100)
 
+        # Retrieve wind arrays. Shape will be (Level, Lat, Lon)
         u_kts = ds_wind['u'].metpy.convert_units('kts').values.squeeze()
         v_kts = ds_wind['v'].metpy.convert_units('kts').values.squeeze()
+        
         lons_wind = ds_wind.longitude.values
         lats_wind = ds_wind.latitude.values
         
+        # Loop over spatial grid
         for i in range(0, lons_wind.shape[0], GRID_SPACING):
             for j in range(0, lons_wind.shape[1], GRID_SPACING):
-                if np.isnan(u_kts[i, j]): continue
                 
-                # Check bounds (using raw lons to match your original logic, 
-                # but adjusting wrap for logic consistency)
+                # FIX: Check ALL levels for this point (slice with :)
+                if np.isnan(u_kts[:, i, j]).any(): continue
+                
+                # Bounds check
                 lon_val = lons_wind[i, j]
                 lon_val = lon_val - 360 if lon_val > 180 else lon_val
                 
@@ -214,7 +216,9 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 sub_ax = ax.inset_axes([proj_pnt[0]-BOX_SIZE/2, proj_pnt[1]-BOX_SIZE/2, BOX_SIZE, BOX_SIZE], transform=ax.transData, zorder=20)
                 h = Hodograph(sub_ax, component_range=80)
                 h.add_grid(increment=20, color='black', alpha=0.3, linewidth=0.5)
-                plot_colored_hodograph(h.ax, u_kts[i, j], v_kts[i, j], REQUESTED_LEVELS)
+                
+                # FIX: Pass the vertical profile slice [:, i, j]
+                plot_colored_hodograph(h.ax, u_kts[:, i, j], v_kts[:, i, j], REQUESTED_LEVELS)
                 sub_ax.axis('off')
 
         valid_time = date_obj + timedelta(hours=fhr)
@@ -232,7 +236,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         print(f"Error processing F{fhr}:")
         traceback.print_exc()
     finally:
-        # Clean up GRIB files to save space
         for f in [mean_file, pmmn_file]: 
             if f and os.path.exists(f): 
                 try: os.remove(f)
@@ -243,7 +246,6 @@ if __name__ == "__main__":
     print(f"Starting Run: {date_str} {run}Z")
     run_dt = datetime.datetime.strptime(f"{date_str} {run}", "%Y%m%d %H")
     
-    # Loop through forecast hours
     for fhr in range(1, 49): 
         process_forecast_hour(run_dt, date_str, run, fhr)
     
