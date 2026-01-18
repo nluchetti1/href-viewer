@@ -178,7 +178,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 
             if has_data:
                 # Use pcolormesh for UH as well
-                cf_uh = ax.pcolormesh(uh_lons, uh_lats, uh_masked,
+                cf_uh = ax.contoruf(uh_lons, uh_lats, uh_masked,
                                       cmap=UH_CMAP, norm=UH_NORM,
                                       shading='auto', transform=ccrs.PlateCarree(), zorder=15)
                 mappable = cf_uh
