@@ -18,8 +18,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # --- Configuration ---
-#REGION = [-83.5, -75.5, 32.5, 37.5]
-REGION = [-83.5, -65.5, 32.5, 37.5]
+REGION = [-83.5, -75.5, 32.5, 37.5]    
 OUTPUT_DIR = "images"
 GRID_SPACING = 25              
 BOX_SIZE = 100000              
@@ -63,7 +62,6 @@ def download_file(date_str, run, fhr, prod_type):
     headers = {'User-Agent': 'Mozilla/5.0'}
     
     # --- FORCE FRESH DOWNLOAD ---
-    # We remove the file if it exists to ensure we aren't using cached/corrupt data
     if os.path.exists(filename):
         try: os.remove(filename)
         except: pass
@@ -138,7 +136,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
-        # --- PLOT CAPE (PCOLORMESH FIX) ---
+        # --- PLOT CAPE (PCOLORMESH - No Smoothing) ---
         if ds_cape is not None:
             cape_vals = np.nan_to_num(ds_cape['cape'].values.squeeze(), nan=0.0)
             cape_vals[cape_vals < 100] = 0
@@ -147,9 +145,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             lons = ds_cape.longitude.values
             lons = (lons + 180) % 360 - 180 
 
-            # SWITCH TO PCOLORMESH
-            # pcolormesh draws individual grid cells rather than wrapping polygons.
-            # This completely eliminates "blanket" wrapping artifacts.
+            # Using pcolormesh for CAPE to avoid the "blanket" bug
             cape_plot = ax.pcolormesh(lons, lats, cape_vals, 
                                       cmap=CAPE_CMAP, norm=CAPE_NORM,
                                       shading='auto', transform=ccrs.PlateCarree(), alpha=0.6)
@@ -162,7 +158,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             cb_cape.ax.set_xticklabels([str(t) for t in spc_ticks], fontsize=10)
             cb_cape.set_label('Surface-based CAPE (J/kg)', fontsize=12, weight='bold')
             
-        # --- PLOT UH (PCOLORMESH FIX) ---
+        # --- PLOT UH (CONTOURF - REVERTED) ---
         if ds_uh_max is not None:
             uh_vals = ds_uh_max.values.squeeze()
             uh_masked = np.where(uh_vals >= 25, uh_vals, np.nan)
@@ -177,10 +173,10 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 has_data = np.nanmax(uh_masked) >= 25
 
             if has_data:
-                # Use pcolormesh for UH as well
+                # REVERTED TO CONTOURF AS REQUESTED
                 cf_uh = ax.contourf(uh_lons, uh_lats, uh_masked,
-                                      cmap=UH_CMAP, norm=UH_NORM,
-                                      shading='auto', transform=ccrs.PlateCarree(), zorder=15)
+                                    levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
+                                    extend='max', transform=ccrs.PlateCarree(), zorder=15)
                 mappable = cf_uh
             else:
                 mappable = plt.cm.ScalarMappable(norm=UH_NORM, cmap=UH_CMAP)
@@ -209,7 +205,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         for i in range(0, lons_wind.shape[0], GRID_SPACING):
             for j in range(0, lons_wind.shape[1], GRID_SPACING):
                 
-                # Check for NaNs across the vertical profile
                 if np.isnan(u_kts[:, i, j]).any(): continue
                 
                 lon_val = lons_wind[i, j]
