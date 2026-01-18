@@ -22,7 +22,6 @@ REGION = [-83.5, -75.5, 32.5, 37.5]
 OUTPUT_DIR = "images"
 GRID_SPACING = 25              
 BOX_SIZE = 100000              
-# Note: These levels must match the levels present in the GRIB file for the coloring to work correctly.
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
 # --- SPC HREF STYLE CAPE CONFIGURATION (0-100 White) ---
@@ -61,10 +60,15 @@ def download_file(date_str, run, fhr, prod_type):
     filename = f"href.t{run}z.conus.{prod_type}.f{fhr:02d}.grib2"
     url = f"{base_url}/{filename}"
     headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    # --- FORCE FRESH DOWNLOAD ---
+    # We remove the file if it exists to ensure we aren't using cached/corrupt data
+    if os.path.exists(filename):
+        try: os.remove(filename)
+        except: pass
+    # ----------------------------
+
     try:
-        if os.path.exists(filename):
-            return filename
-            
         print(f"Downloading {filename}...")
         with requests.get(url, stream=True, timeout=60, headers=headers) as r:
             if r.status_code == 404: 
@@ -86,7 +90,6 @@ def get_segment_color(p_start, p_end):
     else: return 'gold'
 
 def plot_colored_hodograph(ax, u, v, levels):
-    # Ensure we don't go out of bounds if data levels mismatch requested levels
     safe_len = min(len(u), len(levels))
     for k in range(safe_len - 1):
         color = get_segment_color(levels[k], levels[k+1])
@@ -134,21 +137,21 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
-        # --- PLOT CAPE ---
+        # --- PLOT CAPE (PCOLORMESH FIX) ---
         if ds_cape is not None:
-            # Squeeze removes single dimensions (e.g. time) to ensure 2D array
             cape_vals = np.nan_to_num(ds_cape['cape'].values.squeeze(), nan=0.0)
             cape_vals[cape_vals < 100] = 0
             
-            # --- FIX 1: NORMALIZE LONGITUDE ---
             lats = ds_cape.latitude.values
             lons = ds_cape.longitude.values
             lons = (lons + 180) % 360 - 180 
-            # --------------------------------
 
-            cape_plot = ax.contourf(lons, lats, cape_vals, 
-                                    levels=CAPE_LEVELS, cmap=CAPE_CMAP, norm=CAPE_NORM,
-                                    extend='max', alpha=0.6, transform=ccrs.PlateCarree())
+            # SWITCH TO PCOLORMESH
+            # pcolormesh draws individual grid cells rather than wrapping polygons.
+            # This completely eliminates "blanket" wrapping artifacts.
+            cape_plot = ax.pcolormesh(lons, lats, cape_vals, 
+                                      cmap=CAPE_CMAP, norm=CAPE_NORM,
+                                      shading='auto', transform=ccrs.PlateCarree(), alpha=0.6)
             
             ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
             cb_cape = plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal')
@@ -158,12 +161,11 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             cb_cape.ax.set_xticklabels([str(t) for t in spc_ticks], fontsize=10)
             cb_cape.set_label('Surface-based CAPE (J/kg)', fontsize=12, weight='bold')
             
-        # --- PLOT UH ---
+        # --- PLOT UH (PCOLORMESH FIX) ---
         if ds_uh_max is not None:
             uh_vals = ds_uh_max.values.squeeze()
             uh_masked = np.where(uh_vals >= 25, uh_vals, np.nan)
             
-            # Apply same longitude fix to UH
             uh_lats = ds_uh_max.latitude.values
             uh_lons = ds_uh_max.longitude.values
             uh_lons = (uh_lons + 180) % 360 - 180
@@ -174,9 +176,10 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 has_data = np.nanmax(uh_masked) >= 25
 
             if has_data:
-                cf_uh = ax.contourf(uh_lons, uh_lats, uh_masked,
-                                     levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
-                                     extend='max', transform=ccrs.PlateCarree(), zorder=15)
+                # Use pcolormesh for UH as well
+                cf_uh = ax.pcolormesh(uh_lons, uh_lats, uh_masked,
+                                      cmap=UH_CMAP, norm=UH_NORM,
+                                      shading='auto', transform=ccrs.PlateCarree(), zorder=15)
                 mappable = cf_uh
             else:
                 mappable = plt.cm.ScalarMappable(norm=UH_NORM, cmap=UH_CMAP)
@@ -196,21 +199,18 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ]
         ax.legend(handles=legend_elements, loc='upper left', title="Hodograph Layers", framealpha=0.9).set_zorder(100)
 
-        # Retrieve wind arrays. Shape will be (Level, Lat, Lon)
         u_kts = ds_wind['u'].metpy.convert_units('kts').values.squeeze()
         v_kts = ds_wind['v'].metpy.convert_units('kts').values.squeeze()
         
         lons_wind = ds_wind.longitude.values
         lats_wind = ds_wind.latitude.values
         
-        # Loop over spatial grid
         for i in range(0, lons_wind.shape[0], GRID_SPACING):
             for j in range(0, lons_wind.shape[1], GRID_SPACING):
                 
-                # FIX 2: Check for NaNs across the vertical profile ([:, i, j])
+                # Check for NaNs across the vertical profile
                 if np.isnan(u_kts[:, i, j]).any(): continue
                 
-                # Bounds check (using normalized lons for consistency)
                 lon_val = lons_wind[i, j]
                 lon_val = lon_val - 360 if lon_val > 180 else lon_val
                 
@@ -221,7 +221,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 h = Hodograph(sub_ax, component_range=80)
                 h.add_grid(increment=20, color='black', alpha=0.3, linewidth=0.5)
                 
-                # FIX 3: Pass the specific profile slice [:, i, j] to the plotter
                 plot_colored_hodograph(h.ax, u_kts[:, i, j], v_kts[:, i, j], REQUESTED_LEVELS)
                 sub_ax.axis('off')
 
