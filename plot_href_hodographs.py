@@ -13,6 +13,7 @@ import os
 import traceback
 import glob
 import warnings
+from scipy.ndimage import gaussian_filter  # <--- NEW IMPORT
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -61,12 +62,9 @@ def download_file(date_str, run, fhr, prod_type):
     url = f"{base_url}/{filename}"
     headers = {'User-Agent': 'Mozilla/5.0'}
     
-    # --- FORCE FRESH DOWNLOAD ---
-    # We remove the file if it exists to ensure we aren't using cached/corrupt data
     if os.path.exists(filename):
         try: os.remove(filename)
         except: pass
-    # ----------------------------
 
     try:
         print(f"Downloading {filename}...")
@@ -112,7 +110,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         return
 
     try:
-        # Load datasets
         ds_u = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'u'}})
         ds_v = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'v'}})
         ds_wind = xr.merge([ds_u, ds_v])
@@ -123,11 +120,9 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             ds_pmmn_raw = xr.open_dataset(pmmn_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
             ds_uh_max = ds_pmmn_raw[list(ds_pmmn_raw.data_vars)[0]]
 
-        # --- DEBUGGING OUTPUT ---
         cape_min = np.nanmin(ds_cape['cape'].values)
         cape_max = np.nanmax(ds_cape['cape'].values)
         print(f"   [DEBUG] CAPE Range: {cape_min:.1f} to {cape_max:.1f} J/kg")
-        # ------------------------
 
         fig = plt.figure(figsize=(16, 12), facecolor='white')
         fig.subplots_adjust(bottom=0.18, top=0.93)
@@ -137,21 +132,25 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
-        # --- PLOT CAPE (PCOLORMESH FIX) ---
+        # --- PLOT CAPE (SMOOTHED) ---
         if ds_cape is not None:
             cape_vals = np.nan_to_num(ds_cape['cape'].values.squeeze(), nan=0.0)
+            
+            # --- SMOOTHING STEP ---
+            # Sigma=1.5 gives a nice balance between smoothness and detail
+            cape_vals = gaussian_filter(cape_vals, sigma=1.5)
+            # ----------------------
+            
             cape_vals[cape_vals < 100] = 0
             
             lats = ds_cape.latitude.values
             lons = ds_cape.longitude.values
             lons = (lons + 180) % 360 - 180 
 
-            # SWITCH TO PCOLORMESH
-            # pcolormesh draws individual grid cells rather than wrapping polygons.
-            # This completely eliminates "blanket" wrapping artifacts.
+            # Using shading='gouraud' helps blend the smoothed pixels even more
             cape_plot = ax.pcolormesh(lons, lats, cape_vals, 
                                       cmap=CAPE_CMAP, norm=CAPE_NORM,
-                                      shading='auto', transform=ccrs.PlateCarree(), alpha=0.6)
+                                      shading='gouraud', transform=ccrs.PlateCarree(), alpha=0.6)
             
             ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
             cb_cape = plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal')
@@ -159,9 +158,10 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             spc_ticks = [100, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 9000]
             cb_cape.set_ticks(spc_ticks)
             cb_cape.ax.set_xticklabels([str(t) for t in spc_ticks], fontsize=10)
-            cb_cape.set_label('Surface-based CAPE (J/kg)', fontsize=12, weight='bold')
+            cb_cape.set_label('Surface-based CAPE (J/kg) [Smoothed]', fontsize=12, weight='bold')
             
-        # --- PLOT UH (PCOLORMESH FIX) ---
+        # --- PLOT UH (NO SMOOTHING) ---
+        # We generally do NOT smooth UH because we want to see the precise storm tracks
         if ds_uh_max is not None:
             uh_vals = ds_uh_max.values.squeeze()
             uh_masked = np.where(uh_vals >= 25, uh_vals, np.nan)
@@ -176,7 +176,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 has_data = np.nanmax(uh_masked) >= 25
 
             if has_data:
-                # Use pcolormesh for UH as well
                 cf_uh = ax.pcolormesh(uh_lons, uh_lats, uh_masked,
                                       cmap=UH_CMAP, norm=UH_NORM,
                                       shading='auto', transform=ccrs.PlateCarree(), zorder=15)
@@ -208,7 +207,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         for i in range(0, lons_wind.shape[0], GRID_SPACING):
             for j in range(0, lons_wind.shape[1], GRID_SPACING):
                 
-                # Check for NaNs across the vertical profile
                 if np.isnan(u_kts[:, i, j]).any(): continue
                 
                 lon_val = lons_wind[i, j]
