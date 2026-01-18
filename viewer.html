@@ -13,14 +13,16 @@
             display: flex; 
             flex-direction: column; 
             align-items: center; 
-            padding: 20px;
+            padding: 10px; /* Reduced padding to save space */
+            height: 100vh; /* Ensure body takes full height */
+            box-sizing: border-box;
         }
         
-        h2 { margin: 5px 0; color: #333; }
+        h2 { margin: 5px 0; color: #333; font-size: 1.2rem; }
         
         .controls { 
-            margin-bottom: 10px; 
-            font-size: 14px; 
+            margin-bottom: 5px; 
+            font-size: 13px; 
             color: #555; 
             display: flex;
             align-items: center;
@@ -31,10 +33,10 @@
             background-color: #28a745;
             color: white;
             border: none;
-            padding: 6px 12px;
+            padding: 4px 10px;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: bold;
             transition: background 0.2s;
         }
@@ -47,11 +49,11 @@
             display: grid;
             grid-template-columns: repeat(24, 1fr);
             width: 100%;
-            max-width: 1200px;
-            gap: 2px;
-            margin-bottom: 15px;
+            max-width: 1000px; /* Reduced width to match map */
+            gap: 1px;
+            margin-bottom: 5px;
             background: #fff;
-            padding: 5px;
+            padding: 3px;
             border-radius: 5px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
@@ -60,8 +62,8 @@
             background: #e9ecef;
             border: 1px solid #ced4da;
             text-align: center;
-            font-size: 11px;
-            padding: 6px 0;
+            font-size: 10px;
+            padding: 4px 0;
             cursor: pointer;
             user-select: none;
             transition: all 0.1s ease;
@@ -71,7 +73,6 @@
             background: #4dabf7;
             color: white;
             border-color: #339af0;
-            transform: translateY(-2px);
         }
 
         .time-box.active {
@@ -83,25 +84,33 @@
 
         /* MAP CONTAINER */
         #map-container {
-            width: 100%;
-            max-width: 1200px;
+            /* This is the key fix for sizing */
+            width: auto;
+            max-width: 100%;
+            height: auto;
+            
+            /* Add a white background and shadow */
             background: #fff;
             border: 1px solid #ccc;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            
+            /* Center the content */
             display: flex;
             align-items: center;
             justify-content: center;
             padding: 5px;
-            min-height: 400px;
             position: relative; 
         }
         
         #forecast-img {
-            width: 100%;
+            /* Key Change: Constrain by HEIGHT (Viewport Height) */
+            max-height: 80vh;  /* Limits image to 80% of screen height */
+            max-width: 100%;   /* Ensures it doesn't overflow width */
+            width: auto;       /* Allows width to shrink to maintain aspect ratio */
             height: auto;
+            
             display: block;
             z-index: 2; 
-            min-height: 400px; 
         }
 
         /* LOADING SPINNER */
@@ -239,7 +248,7 @@
         }
     });
 
-    // --- GIF GENERATION LOGIC (FIXED) ---
+    // --- GIF GENERATION LOGIC ---
     async function generateGIF() {
         btn.disabled = true;
         btn.textContent = "Loading Worker...";
