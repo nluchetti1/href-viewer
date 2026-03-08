@@ -24,29 +24,27 @@ GRID_SPACING = 25
 BOX_SIZE = 100000              
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
-# --- SPC HREF STYLE CAPE CONFIGURATION (0-100 White) ---
+# --- CAPE CONFIGURATION ---
 CAPE_LEVELS = [0, 100, 250, 500, 750, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 9000]
-
 CAPE_COLORS = [
-    '#ffffff', # 0-100: White
-    '#e1e1e1', '#c0c0c0', '#808080', '#626262', # Grays
-    '#9dc2ff', '#4169e1', '#0000cd', # Blues
-    '#00ff00', '#008000', # Greens
-    '#ffff00', # Yellow
-    '#ff8c00', # Orange
-    '#ff0000', # Red
-    '#ff00ff', # Magenta
-    '#800080'  # Purple
+    '#ffffff', '#e1e1e1', '#c0c0c0', '#808080', '#626262',
+    '#9dc2ff', '#4169e1', '#0000cd', '#00ff00', '#008000',
+    '#ffff00', '#ff8c00', '#ff0000', '#ff00ff', '#800080' 
 ]
-
 CAPE_CMAP = mcolors.ListedColormap(CAPE_COLORS)
 CAPE_NORM = mcolors.BoundaryNorm(CAPE_LEVELS, CAPE_CMAP.N)
 
-# --- UH COLORS ---
-UH_LEVELS = [25, 50, 75, 100, 150, 200, 250]
-uh_colors = ['#c7f9cc', '#7cfc00', '#32cd32', '#008000', '#006400', '#000000']
-UH_CMAP = mcolors.ListedColormap(uh_colors)
-UH_NORM = mcolors.BoundaryNorm(UH_LEVELS, UH_CMAP.N)
+# --- UH MAX COLORS (Right-movers) ---
+UH_MAX_LEVELS = [25, 50, 75, 100, 150, 200, 250]
+uh_max_colors = ['#c7f9cc', '#7cfc00', '#32cd32', '#008000', '#006400', '#000000']
+UH_MAX_CMAP = mcolors.ListedColormap(uh_max_colors)
+UH_MAX_NORM = mcolors.BoundaryNorm(UH_MAX_LEVELS, UH_MAX_CMAP.N)
+
+# --- UH MIN COLORS (Left-movers) ---
+UH_MIN_LEVELS = [-250, -200, -150, -100, -75, -50, -25]
+uh_min_colors = ['#000000', '#0000cd', '#4169e1', '#87ceeb', '#00ffff', '#e0ffff']
+UH_MIN_CMAP = mcolors.ListedColormap(uh_min_colors)
+UH_MIN_NORM = mcolors.BoundaryNorm(UH_MIN_LEVELS, UH_MIN_CMAP.N)
 
 def get_latest_run_time():
     now = datetime.datetime.utcnow()
@@ -61,11 +59,9 @@ def download_file(date_str, run, fhr, prod_type):
     url = f"{base_url}/{filename}"
     headers = {'User-Agent': 'Mozilla/5.0'}
     
-    # --- FORCE FRESH DOWNLOAD ---
     if os.path.exists(filename):
         try: os.remove(filename)
         except: pass
-    # ----------------------------
 
     try:
         print(f"Downloading {filename}...")
@@ -111,22 +107,22 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         return
 
     try:
-        # Load datasets
+        # Load mean fields
         ds_u = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'u'}})
         ds_v = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'v'}})
         ds_wind = xr.merge([ds_u, ds_v])
         ds_cape = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': 'cape', 'typeOfLevel': 'surface'}})
         
-        ds_uh_max = None
+        # Load PMMN Updraft Helicity (Strictly filter for 'uphl' and the 2-5km layer)
+        ds_uh = None
         if pmmn_file:
-            ds_pmmn_raw = xr.open_dataset(pmmn_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
-            ds_uh_max = ds_pmmn_raw[list(ds_pmmn_raw.data_vars)[0]]
-
-        # --- DEBUGGING OUTPUT ---
-        cape_min = np.nanmin(ds_cape['cape'].values)
-        cape_max = np.nanmax(ds_cape['cape'].values)
-        print(f"   [DEBUG] CAPE Range: {cape_min:.1f} to {cape_max:.1f} J/kg")
-        # ------------------------
+            try:
+                ds_pmmn_raw = xr.open_dataset(pmmn_file, engine='cfgrib', backend_kwargs={
+                    'filter_by_keys': {'shortName': 'uphl', 'bottomLevel': 2000, 'topLevel': 5000}
+                })
+                ds_uh = ds_pmmn_raw['uphl']
+            except Exception as e:
+                print(f"Could not extract UH from PMMN: {e}")
 
         fig = plt.figure(figsize=(16, 12), facecolor='white')
         fig.subplots_adjust(bottom=0.18, top=0.93)
@@ -136,7 +132,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
-        # --- PLOT CAPE (PCOLORMESH - No Smoothing) ---
+        # --- CAPE ---
         if ds_cape is not None:
             cape_vals = np.nan_to_num(ds_cape['cape'].values.squeeze(), nan=0.0)
             cape_vals[cape_vals < 100] = 0
@@ -145,46 +141,49 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             lons = ds_cape.longitude.values
             lons = (lons + 180) % 360 - 180 
 
-            # Using pcolormesh for CAPE to avoid the "blanket" bug
             cape_plot = ax.pcolormesh(lons, lats, cape_vals, 
                                       cmap=CAPE_CMAP, norm=CAPE_NORM,
                                       shading='auto', transform=ccrs.PlateCarree(), alpha=0.6)
             
             ax_cbar_cape = fig.add_axes([0.15, 0.10, 0.7, 0.02]) 
             cb_cape = plt.colorbar(cape_plot, cax=ax_cbar_cape, orientation='horizontal')
-            
             spc_ticks = [100, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 9000]
             cb_cape.set_ticks(spc_ticks)
             cb_cape.ax.set_xticklabels([str(t) for t in spc_ticks], fontsize=10)
             cb_cape.set_label('Surface-based CAPE (J/kg)', fontsize=12, weight='bold')
             
-        # --- PLOT UH (CONTOURF - REVERTED) ---
-        if ds_uh_max is not None:
-            uh_vals = ds_uh_max.values.squeeze()
-            uh_masked = np.where(uh_vals >= 25, uh_vals, np.nan)
-            
-            uh_lats = ds_uh_max.latitude.values
-            uh_lons = ds_uh_max.longitude.values
+        # --- UPDRAFT HELICITY (MAX AND MIN) ---
+        if ds_uh is not None:
+            uh_vals = ds_uh.values.squeeze()
+            uh_lats = ds_uh.latitude.values
+            uh_lons = ds_uh.longitude.values
             uh_lons = (uh_lons + 180) % 360 - 180
-
-            if np.all(np.isnan(uh_masked)):
-                has_data = False
-            else:
-                has_data = np.nanmax(uh_masked) >= 25
-
-            if has_data:
-                # REVERTED TO CONTOURF AS REQUESTED
-                cf_uh = ax.contourf(uh_lons, uh_lats, uh_masked,
-                                    levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
-                                    extend='max', transform=ccrs.PlateCarree(), zorder=15)
-                mappable = cf_uh
-            else:
-                mappable = plt.cm.ScalarMappable(norm=UH_NORM, cmap=UH_CMAP)
-                mappable.set_array([]) 
             
-            ax_cbar_max = fig.add_axes([0.3, 0.03, 0.4, 0.015]) 
-            plt.colorbar(mappable, cax=ax_cbar_max, orientation='horizontal', 
-                         label='2-5km Max UH (>25 m$^2$/s$^2$)', extend='max')
+            # Extract Right Movers (Positive)
+            uh_max_masked = np.where(uh_vals >= 25, uh_vals, np.nan)
+            if np.nanmax(uh_vals) >= 25:
+                ax.contourf(uh_lons, uh_lats, uh_max_masked,
+                            levels=UH_MAX_LEVELS, cmap=UH_MAX_CMAP, norm=UH_MAX_NORM,
+                            extend='max', transform=ccrs.PlateCarree(), zorder=15)
+                
+            # Extract Left Movers (Negative)
+            uh_min_masked = np.where(uh_vals <= -25, uh_vals, np.nan)
+            if np.nanmin(uh_vals) <= -25:
+                ax.contourf(uh_lons, uh_lats, uh_min_masked,
+                            levels=UH_MIN_LEVELS, cmap=UH_MIN_CMAP, norm=UH_MIN_NORM,
+                            extend='min', transform=ccrs.PlateCarree(), zorder=15)
+
+            # Max Colorbar (Left)
+            ax_cbar_max = fig.add_axes([0.15, 0.03, 0.3, 0.015])
+            mappable_max = plt.cm.ScalarMappable(norm=UH_MAX_NORM, cmap=UH_MAX_CMAP)
+            plt.colorbar(mappable_max, cax=ax_cbar_max, orientation='horizontal', 
+                         label='Max UH (>25 m$^2$/s$^2$)', extend='max')
+
+            # Min Colorbar (Right)
+            ax_cbar_min = fig.add_axes([0.55, 0.03, 0.3, 0.015])
+            mappable_min = plt.cm.ScalarMappable(norm=UH_MIN_NORM, cmap=UH_MIN_CMAP)
+            plt.colorbar(mappable_min, cax=ax_cbar_min, orientation='horizontal', 
+                         label='Min UH (<-25 m$^2$/s$^2$)', extend='min')
 
         # --- HODOGRAPHS ---
         legend_elements = [
@@ -198,7 +197,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 
         u_kts = ds_wind['u'].metpy.convert_units('kts').values.squeeze()
         v_kts = ds_wind['v'].metpy.convert_units('kts').values.squeeze()
-        
         lons_wind = ds_wind.longitude.values
         lats_wind = ds_wind.latitude.values
         
