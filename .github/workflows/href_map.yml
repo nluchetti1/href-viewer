@@ -1,8 +1,9 @@
-name: Update HREF Hodograph Map
+name: Update HREF & REFS Hodograph Maps
 
 on:
   schedule:
-    - cron: '20 3,15 * * *'
+    # Runs every 6 hours to accommodate REFS updates
+    - cron: '30 3,9,15,21 * * *'
   workflow_dispatch:
 
 permissions:
@@ -24,11 +25,40 @@ jobs:
       with:
         python-version: '3.9'
 
-    - name: Install Dependencies
+    - name: Install System Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libeccodes0
+        sudo apt-get install -y libeccodes0 libgdal-dev libgeos-dev libproj-dev
+
+    - name: Install Python Dependencies
+      run: |
         pip install xarray matplotlib cartopy metpy requests numpy cfgrib ecmwflibs
+
+    - name: Wait for REFS Model Data
+      id: model_check
+      run: |
+        HOUR=$(date -u +%H)
+        # Identify target run hour
+        if [ "$HOUR" -ge 21 ] || [ "$HOUR" -lt 3 ]; then 
+          RUN_HOUR="18"
+          DATE=$(date -u -d "6 hours ago" +%Y%m%d) 
+        elif [ "$HOUR" -ge 15 ]; then RUN_HOUR="12"; DATE=$(date -u +%Y%m%d)
+        elif [ "$HOUR" -ge 9 ];  then RUN_HOUR="06"; DATE=$(date -u +%Y%m%d)
+        else RUN_HOUR="00"; DATE=$(date -u +%Y%m%d); fi
+        
+        URL="https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a/refs.${DATE}/${RUN_HOUR}/enspost/refs.t${RUN_HOUR}z.mean.f01.conus.grib2"
+        
+        echo "Checking AWS for REFS: $URL"
+        for i in {1..12}; do
+          if curl --output /dev/null --silent --head --fail "$URL"; then
+            echo "Data is Ready!"
+            exit 0
+          fi
+          echo "Attempt $i/12: Data not found yet. Waiting 5 mins..."
+          sleep 300
+        done
+        echo "Data timed out. Exiting."
+        exit 1
 
     - name: Run Plotting Script
       run: python plot_href_hodographs.py
@@ -49,7 +79,7 @@ jobs:
           echo "No changes to commit."
         else
           # Commit first (saves state including deletions)
-          git commit -m "Auto-update HREF plots for $(date -u)"
+          git commit -m "Auto-update Hodograph plots for $(date -u)"
           
           # Then pull (safely merges history)
           git pull --rebase
