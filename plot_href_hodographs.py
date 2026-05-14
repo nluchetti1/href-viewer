@@ -24,7 +24,7 @@ GRID_SPACING = 25
 BOX_SIZE = 100000              
 REQUESTED_LEVELS = [1000, 925, 850, 700, 500, 250]
 
-# --- SPC HREF STYLE CAPE CONFIGURATION (0-100 White) ---
+# --- SPC CAPE CONFIGURATION (0-100 White) ---
 CAPE_LEVELS = [0, 100, 250, 500, 750, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000, 7000, 9000]
 
 CAPE_COLORS = [
@@ -48,24 +48,39 @@ uh_colors = ['#c7f9cc', '#7cfc00', '#32cd32', '#008000', '#006400', '#000000']
 UH_CMAP = mcolors.ListedColormap(uh_colors)
 UH_NORM = mcolors.BoundaryNorm(UH_LEVELS, UH_CMAP.N)
 
-def get_latest_run_time():
+def get_run_times():
     now = datetime.datetime.utcnow()
-    if now.hour >= 15: run = '12'; date = now
-    elif now.hour >= 3: run = '00'; date = now
-    else: run = '12'; date = now - datetime.timedelta(days=1)
-    return date.strftime('%Y%m%d'), run, date
+    
+    # HREF Timing (12hr)
+    if now.hour >= 15: h_run = '12'; h_date = now
+    elif now.hour >= 3: h_run = '00'; h_date = now
+    else: h_run = '12'; h_date = now - timedelta(days=1)
+    
+    # REFS Timing (6hr)
+    if now.hour >= 21: r_run = '18'; r_date = now
+    elif now.hour >= 15: r_run = '12'; r_date = now
+    elif now.hour >= 9: r_run = '06'; r_date = now
+    elif now.hour >= 3: r_run = '00'; r_date = now
+    else: r_run = '18'; r_date = now - timedelta(days=1)
+    
+    return (h_date.strftime('%Y%m%d'), h_run, h_date, 
+            r_date.strftime('%Y%m%d'), r_run, r_date)
 
-def download_file(date_str, run, fhr, prod_type):
-    base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{date_str}/ensprod"
-    filename = f"href.t{run}z.conus.{prod_type}.f{fhr:02d}.grib2"
+def download_file(model, date_str, run, fhr, prod_type):
+    if model == 'href':
+        base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/href/prod/href.{date_str}/ensprod"
+        filename = f"href.t{run}z.conus.{prod_type}.f{fhr:02d}.grib2"
+    elif model == 'refs':
+        base_url = f"https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a/refs.{date_str}/{run}/enspost"
+        filename = f"refs.t{run}z.{prod_type}.f{fhr:02d}.conus.grib2"
+
     url = f"{base_url}/{filename}"
     headers = {'User-Agent': 'Mozilla/5.0'}
     
-    # --- FORCE FRESH DOWNLOAD ---
+    # Force fresh download
     if os.path.exists(filename):
         try: os.remove(filename)
         except: pass
-    # ----------------------------
 
     try:
         print(f"Downloading {filename}...")
@@ -94,39 +109,41 @@ def plot_colored_hodograph(ax, u, v, levels):
         color = get_segment_color(levels[k], levels[k+1])
         ax.plot([u[k], u[k+1]], [v[k], v[k+1]], color=color, linewidth=2.5)
 
-def cleanup_old_runs(current_date, current_run):
-    prefix = f"href_hodo_cape_{current_date}_{current_run}z"
-    for f in glob.glob(os.path.join(OUTPUT_DIR, "href_hodo_cape_*.png")):
+def cleanup_old_runs(model, current_date, current_run):
+    prefix = f"{model}_hodo_cape_{current_date}_{current_run}z"
+    for f in glob.glob(os.path.join(OUTPUT_DIR, f"{model}_hodo_cape_*.png")):
         if not os.path.basename(f).startswith(prefix):
             try: os.remove(f)
             except: pass
 
-def process_forecast_hour(date_obj, date_str, run, fhr):
-    print(f"\nProcessing F{fhr:02d}...")
-    mean_file = download_file(date_str, run, fhr, 'mean')
-    pmmn_file = download_file(date_str, run, fhr, 'pmmn')
+def process_forecast_hour(model, date_obj, date_str, run, fhr):
+    print(f"\nProcessing {model.upper()} F{fhr:02d}...")
+    mean_file = download_file(model, date_str, run, fhr, 'mean')
+    pmmn_file = download_file(model, date_str, run, fhr, 'pmmn')
     
     if not mean_file: 
-        print("Mean file unavailable.")
+        print(f"{model.upper()} Mean file unavailable.")
         return
 
     try:
-        # Load datasets
         ds_u = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'u'}})
         ds_v = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'isobaricInhPa', 'shortName': 'v'}})
         ds_wind = xr.merge([ds_u, ds_v])
+        
+        # Safety Check for incomplete coordinate files
+        if not hasattr(ds_wind, 'latitude'):
+            print(f"  -> Skipping F{fhr:02d}: Incomplete coordinate data.")
+            return
+
         ds_cape = xr.open_dataset(mean_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': 'cape', 'typeOfLevel': 'surface'}})
         
         ds_uh_max = None
         if pmmn_file:
-            ds_pmmn_raw = xr.open_dataset(pmmn_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
-            ds_uh_max = ds_pmmn_raw[list(ds_pmmn_raw.data_vars)[0]]
-
-        # --- DEBUGGING OUTPUT ---
-        cape_min = np.nanmin(ds_cape['cape'].values)
-        cape_max = np.nanmax(ds_cape['cape'].values)
-        print(f"   [DEBUG] CAPE Range: {cape_min:.1f} to {cape_max:.1f} J/kg")
-        # ------------------------
+            try:
+                ds_pmmn_raw = xr.open_dataset(pmmn_file, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGroundLayer'}})
+                ds_uh_max = ds_pmmn_raw[list(ds_pmmn_raw.data_vars)[0]]
+            except Exception as e:
+                print(f"Could not extract UH from pmmn: {e}")
 
         fig = plt.figure(figsize=(16, 12), facecolor='white')
         fig.subplots_adjust(bottom=0.18, top=0.93)
@@ -136,7 +153,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
         ax.add_feature(cfeature.COASTLINE, linewidth=2.0, zorder=10)
         ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black', zorder=10)
 
-        # --- PLOT CAPE (PCOLORMESH - No Smoothing) ---
+        # --- PLOT CAPE ---
         if ds_cape is not None:
             cape_vals = np.nan_to_num(ds_cape['cape'].values.squeeze(), nan=0.0)
             cape_vals[cape_vals < 100] = 0
@@ -145,7 +162,6 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             lons = ds_cape.longitude.values
             lons = (lons + 180) % 360 - 180 
 
-            # Using pcolormesh for CAPE to avoid the "blanket" bug
             cape_plot = ax.pcolormesh(lons, lats, cape_vals, 
                                       cmap=CAPE_CMAP, norm=CAPE_NORM,
                                       shading='auto', transform=ccrs.PlateCarree(), alpha=0.6)
@@ -158,7 +174,7 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             cb_cape.ax.set_xticklabels([str(t) for t in spc_ticks], fontsize=10)
             cb_cape.set_label('Surface-based CAPE (J/kg)', fontsize=12, weight='bold')
             
-        # --- PLOT UH (CONTOURF - REVERTED) ---
+        # --- PLOT UH ---
         if ds_uh_max is not None:
             uh_vals = ds_uh_max.values.squeeze()
             uh_masked = np.where(uh_vals >= 25, uh_vals, np.nan)
@@ -167,13 +183,9 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
             uh_lons = ds_uh_max.longitude.values
             uh_lons = (uh_lons + 180) % 360 - 180
 
-            if np.all(np.isnan(uh_masked)):
-                has_data = False
-            else:
-                has_data = np.nanmax(uh_masked) >= 25
+            has_data = False if np.all(np.isnan(uh_masked)) else np.nanmax(uh_masked) >= 25
 
             if has_data:
-                # REVERTED TO CONTOURF AS REQUESTED
                 cf_uh = ax.contourf(uh_lons, uh_lats, uh_masked,
                                     levels=UH_LEVELS, cmap=UH_CMAP, norm=UH_NORM,
                                     extend='max', transform=ccrs.PlateCarree(), zorder=15)
@@ -222,11 +234,11 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
 
         valid_time = date_obj + timedelta(hours=fhr)
         valid_str = valid_time.strftime("%a %H:%MZ") 
-        plt.suptitle(f"HREF Mean CAPE + PMMN UH Tracks | Run: {date_str} {run}Z | Valid: {valid_str} (f{fhr:02d})", 
+        plt.suptitle(f"{model.upper()} Mean CAPE + PMMN UH Tracks | Run: {date_str} {run}Z | Valid: {valid_str} (f{fhr:02d})", 
                      fontsize=20, weight='bold', y=0.98)
         
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        filename_png = f"{OUTPUT_DIR}/href_hodo_cape_{date_str}_{run}z_f{fhr:02d}.png"
+        filename_png = f"{OUTPUT_DIR}/{model}_hodo_cape_{date_str}_{run}z_f{fhr:02d}.png"
         plt.savefig(filename_png, bbox_inches='tight', dpi=100) 
         print(f"   Saved: {filename_png}")
         plt.close(fig)
@@ -241,13 +253,14 @@ def process_forecast_hour(date_obj, date_str, run, fhr):
                 except: pass
 
 if __name__ == "__main__":
-    date_str, run, date_obj = get_latest_run_time()
-    print(f"Starting Run: {date_str} {run}Z")
-    run_dt = datetime.datetime.strptime(f"{date_str} {run}", "%Y%m%d %H")
+    h_date_str, h_run, h_date_obj, r_date_str, r_run, r_date_obj = get_run_times()
     
-    for fhr in range(1, 49): 
-        process_forecast_hour(run_dt, date_str, run, fhr)
-    
-    cleanup_old_runs(date_str, run)
-    print("Done.")
+    print(f"Starting HREF Run: {h_date_str} {h_run}Z")
+    for fhr in range(1, 49): process_forecast_hour('href', h_date_obj, h_date_str, h_run, fhr)
+    cleanup_old_runs('href', h_date_str, h_run)
 
+    print(f"Starting REFS Run: {r_date_str} {r_run}Z")
+    for fhr in range(1, 49): process_forecast_hour('refs', r_date_obj, r_date_str, r_run, fhr)
+    cleanup_old_runs('refs', r_date_str, r_run)
+    
+    print("Done.")
