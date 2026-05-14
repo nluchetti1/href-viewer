@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HREF Hodograph Viewer</title>
+    <title>Hodograph & CAPE Viewer</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
     <style>
         body { 
@@ -13,8 +13,8 @@
             display: flex; 
             flex-direction: column; 
             align-items: center; 
-            padding: 10px; /* Reduced padding to save space */
-            height: 100vh; /* Ensure body takes full height */
+            padding: 10px;
+            height: 100vh;
             box-sizing: border-box;
         }
         
@@ -27,6 +27,15 @@
             display: flex;
             align-items: center;
             gap: 15px;
+        }
+
+        select {
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid #ced4da;
+            font-weight: bold;
+            font-size: 13px;
+            cursor: pointer;
         }
 
         button#download-btn {
@@ -49,7 +58,7 @@
             display: grid;
             grid-template-columns: repeat(24, 1fr);
             width: 100%;
-            max-width: 1000px; /* Reduced width to match map */
+            max-width: 1000px;
             gap: 1px;
             margin-bottom: 5px;
             background: #fff;
@@ -84,17 +93,12 @@
 
         /* MAP CONTAINER */
         #map-container {
-            /* This is the key fix for sizing */
             width: auto;
             max-width: 100%;
             height: auto;
-            
-            /* Add a white background and shadow */
             background: #fff;
             border: 1px solid #ccc;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-            
-            /* Center the content */
             display: flex;
             align-items: center;
             justify-content: center;
@@ -103,12 +107,10 @@
         }
         
         #forecast-img {
-            /* Key Change: Constrain by HEIGHT (Viewport Height) */
-            max-height: 80vh;  /* Limits image to 80% of screen height */
-            max-width: 100%;   /* Ensures it doesn't overflow width */
-            width: auto;       /* Allows width to shrink to maintain aspect ratio */
+            max-height: 80vh; 
+            max-width: 100%;   
+            width: auto;       
             height: auto;
-            
             display: block;
             z-index: 2; 
         }
@@ -138,16 +140,19 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-
     </style>
 </head>
 <body>
 
-    <h2 id="page-title">HREF Hodograph Analysis (Live)</h2>
+    <h2 id="page-title">Hodograph & CAPE Analysis (Live)</h2>
     
     <div class="controls">
+        <select id="model-select" onchange="updateModel()">
+            <option value="refs" selected>REFS Ensemble</option>
+            <option value="href">HREF Ensemble</option>
+        </select>
         <span id="run-info">Loading...</span> | 
-        <span><strong>Hover</strong>/<strong>Click</strong> to view, <strong>Arrows</strong> to navigate.</span>
+        <span><strong>Hover</strong>/<strong>Click</strong> to view, <strong>Arrows</strong> navigate.</span>
         <button id="download-btn" onclick="generateGIF()">Download Animated GIF</button>
     </div>
 
@@ -158,7 +163,6 @@
             <div class="spinner"></div>
             <span>Loading Map...</span>
         </div>
-        
         <img id="forecast-img" src="" alt="Map Display" onerror="this.style.display='none'">
     </div>
 
@@ -171,36 +175,57 @@
     const now = new Date();
     const utcHour = now.getUTCHours();
     
-    let runDate = now;
-    let runHour = '00';
+    // Calculate HREF times (12hr cadence)
+    let hrefRunDate = new Date(now);
+    let hrefRunHour = '00';
+    if (utcHour >= 15) { hrefRunHour = '12'; } 
+    else if (utcHour >= 3) { hrefRunHour = '00'; } 
+    else { hrefRunHour = '12'; hrefRunDate.setUTCDate(hrefRunDate.getUTCDate() - 1); }
+    const hrefDateStr = `${hrefRunDate.getUTCFullYear()}${String(hrefRunDate.getUTCMonth() + 1).padStart(2, '0')}${String(hrefRunDate.getUTCDate()).padStart(2, '0')}`;
 
-    if (utcHour >= 15) {
-        runHour = '12';
-    } else if (utcHour >= 3) {
-        runHour = '00';
-    } else {
-        runHour = '12';
-        runDate.setUTCDate(runDate.getUTCDate() - 1);
-    }
-
-    const yyyy = runDate.getUTCFullYear();
-    const mm = String(runDate.getUTCMonth() + 1).padStart(2, '0');
-    const dd = String(runDate.getUTCDate()).padStart(2, '0');
-    const dateStr = `${yyyy}${mm}${dd}`;
-
-    document.getElementById('run-info').textContent = `Run: ${dateStr} ${runHour}Z`;
+    // Calculate REFS times (6hr cadence)
+    let refsRunDate = new Date(now);
+    let refsRunHour = '00';
+    if (utcHour >= 21) { refsRunHour = '18'; } 
+    else if (utcHour >= 15) { refsRunHour = '12'; } 
+    else if (utcHour >= 9) { refsRunHour = '06'; } 
+    else if (utcHour >= 3) { refsRunHour = '00'; } 
+    else { refsRunHour = '18'; refsRunDate.setUTCDate(refsRunDate.getUTCDate() - 1); }
+    const refsDateStr = `${refsRunDate.getUTCFullYear()}${String(refsRunDate.getUTCMonth() + 1).padStart(2, '0')}${String(refsRunDate.getUTCDate()).padStart(2, '0')}`;
 
     // --- ELEMENTS ---
     const timeline = document.getElementById('timeline');
     const imgElement = document.getElementById('forecast-img');
     const loader = document.getElementById('loader');
     const btn = document.getElementById('download-btn');
+    const modelSelect = document.getElementById('model-select');
     let boxes = [];
+    
+    // Set Active State Variables
+    let currentModel = 'refs';
+    let activeDateStr = refsDateStr;
+    let activeRunHour = refsRunHour;
+
+    function updateModel() {
+        currentModel = modelSelect.value;
+        if (currentModel === 'refs') {
+            activeDateStr = refsDateStr;
+            activeRunHour = refsRunHour;
+        } else {
+            activeDateStr = hrefDateStr;
+            activeRunHour = hrefRunHour;
+        }
+        document.getElementById('run-info').textContent = `Run: ${activeDateStr} ${activeRunHour}Z`;
+        
+        let activeBox = document.querySelector('.time-box.active');
+        let currentFhr = activeBox ? parseInt(activeBox.id.split('-')[1]) : 1;
+        setImage(currentFhr);
+    }
 
     // --- IMAGE LOADING LOGIC ---
     function setImage(fhr) {
         const fhrStr = String(fhr).padStart(2, '0');
-        const filename = `href_hodo_cape_${dateStr}_${runHour}z_f${fhrStr}.png`;
+        const filename = `${currentModel}_hodo_cape_${activeDateStr}_${activeRunHour}z_f${fhrStr}.png`;
         
         loader.style.display = 'flex';
         imgElement.style.display = 'block';
@@ -211,9 +236,7 @@
         if(activeBox) activeBox.classList.add('active');
     }
 
-    imgElement.onload = function() {
-        loader.style.display = 'none';
-    };
+    imgElement.onload = function() { loader.style.display = 'none'; };
 
     // --- BUILD TIMELINE ---
     for (let i = 1; i <= totalHours; i++) {
@@ -229,15 +252,13 @@
         boxes.push(box);
     }
 
-    setImage(1);
+    updateModel(); // Initialize first load
 
     // Keyboard Controls
     document.addEventListener('keydown', (e) => {
-        let currentSrc = imgElement.src;
-        let match = currentSrc.match(/_f(\d+)\.png/);
-        if (!match) return;
-        
-        let currentFhr = parseInt(match[1]);
+        let activeBox = document.querySelector('.time-box.active');
+        if (!activeBox) return;
+        let currentFhr = parseInt(activeBox.id.split('-')[1]);
 
         if (e.key === "ArrowRight") {
             let next = currentFhr + 1;
@@ -254,12 +275,10 @@
         btn.textContent = "Loading Worker...";
         
         try {
-            // 1. Fetch worker manually
             const workerResponse = await fetch('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js');
             const workerBlob = await workerResponse.blob();
             const workerUrl = URL.createObjectURL(workerBlob);
 
-            // 2. Initialize GIF
             const gif = new GIF({
                 workers: 2,
                 quality: 10,
@@ -268,10 +287,9 @@
                 height: imgElement.naturalHeight || 800
             });
 
-            // 3. Add frames
             for (let i = 1; i <= totalHours; i++) {
                 const fhrStr = String(i).padStart(2, '0');
-                const filename = `href_hodo_cape_${dateStr}_${runHour}z_f${fhrStr}.png`;
+                const filename = `${currentModel}_hodo_cape_${activeDateStr}_${activeRunHour}z_f${fhrStr}.png`;
                 const url = imageDir + filename;
                 
                 const percent = Math.round((i / totalHours) * 100);
@@ -280,26 +298,18 @@
                 const img = new Image();
                 img.crossOrigin = "Anonymous";
                 
-                await new Promise((resolve, reject) => {
-                    img.onload = () => {
-                        gif.addFrame(img, {delay: 250});
-                        resolve();
-                    };
-                    img.onerror = () => {
-                        console.warn(`Skipping missing frame: ${filename}`);
-                        resolve();
-                    };
+                await new Promise((resolve) => {
+                    img.onload = () => { gif.addFrame(img, {delay: 250}); resolve(); };
+                    img.onerror = () => { console.warn(`Skipping missing frame: ${filename}`); resolve(); };
                     img.src = url;
                 });
             }
 
             btn.textContent = "Rendering...";
-
-            // 4. Finish
             gif.on('finished', function(blob) {
                 const link = document.createElement('a');
                 link.href = URL.createObjectURL(blob);
-                link.download = `href_loop_${dateStr}_${runHour}z.gif`;
+                link.download = `${currentModel}_loop_${activeDateStr}_${activeRunHour}z.gif`;
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
